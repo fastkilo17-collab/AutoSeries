@@ -11,7 +11,7 @@ const LS_DATA = "autoseries.v1", LS_LIB = "autoseries.v3", LS_LIB2 = "autoseries
 function lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch { /* storage blocked */ } }
 
-const S = { ready: false, chars: [], delChar: null, charEdit: null, lib: [], activeId: null, series: null, episodes: [], view: "home", epNo: null, creating: false, confirmDel: null, confirmImport: false, editShot: null, editEp: false, delShot: null };
+const S = { ready: false, chars: [], delChar: null, charEdit: null, lib: [], activeId: null, series: null, episodes: [], view: "home", epNo: null, creating: false, confirmDel: null, confirmImport: false, editShot: null, shotOpen: null, editEp: false, delShot: null };
 let T = null;
 
 // ---------- storage (this browser only) ----------
@@ -188,9 +188,9 @@ function vShot(s, number, backup) {
 }
 function vEpisode(d) {
   const shots = arr(d?.shots, "shots");
-  if (shots.length < SHOTS) throw new Error(`คำตอบมีแค่ ${shots.length} ช็อต ต้องมี ${SHOTS} ช็อต`);
+  if (shots.length < SHOTS) throw new Error(`คำตอบมีแค่ ${shots.length} ฉาก ต้องมี ${SHOTS} ฉาก`);
   const backup = d.backup_shot ?? shots[SHOTS];
-  if (!backup) throw new Error("ไม่มีช็อตสำรอง (backup_shot)");
+  if (!backup) throw new Error("ไม่มีฉากสำรอง (backup_shot)");
   return {
     title: str(d.title, "title"), summary_th: str(d.summary_th, "summary_th"),
     shots: [...shots.slice(0, SHOTS).map((s, i) => vShot(s, i + 1, false)), vShot(backup, SHOTS + 1, true)],
@@ -214,8 +214,8 @@ function extractJSON(text) {
 
 // ---------- prompts ----------
 const BIBLE_SHAPE = `{"title":"ชื่อเรื่อง","world":"โลกและกติกาของเรื่อง","tone":"โทนเรื่อง","style_lock_en":"fixed visual style in English","use_existing":["ชื่อตัวละครเดิมจากคลังที่เลือกใช้ ตรงชื่อเป๊ะ"],"characters":[{"name":"ชื่อ","role":"บทบาท","personality":"บุคลิก","goal":"เป้าหมาย","look_en":"fixed appearance in English"}],"open_threads":["ปมที่ค้าง"]}`;
-const SHOT_SHAPE = `{"number":1,"action_th":"สิ่งที่เกิดขึ้นในช็อต","dialogue_th":"บทพูดสั้นๆ หรือว่าง","prompt_en":"camera, action, light, audio in English"}`;
-const EP_SHAPE = `{"title":"ชื่อตอน","summary_th":"สรุปตอน 2-3 ประโยค","shots":[${SHOT_SHAPE}, ... รวม ${SHOTS} ช็อต],"backup_shot":{"number":${SHOTS + 1},"action_th":"...","dialogue_th":"","prompt_en":"..."},"resolved_threads":["ข้อความปมเดิมที่คลายแล้ว"],"new_threads":["ปมใหม่"]}`;
+const SHOT_SHAPE = `{"number":1,"action_th":"สิ่งที่เกิดขึ้นในฉาก","dialogue_th":"บทพูดสั้นๆ หรือว่าง","prompt_en":"camera, action, light, audio in English"}`;
+const EP_SHAPE = `{"title":"ชื่อตอน","summary_th":"สรุปตอน 2-3 ประโยค","shots":[${SHOT_SHAPE}, ... รวม ${SHOTS} ฉาก],"backup_shot":{"number":${SHOTS + 1},"action_th":"...","dialogue_th":"","prompt_en":"..."},"resolved_threads":["ข้อความปมเดิมที่คลายแล้ว"],"new_threads":["ปมใหม่"]}`;
 function promptBible(idea) {
   const lib = S.chars.filter((c) => c.name).map((c) => ({ name: c.name, role: c.role, personality: c.personality, goal: c.goal, look_en: c.look_en }));
   const libBlock = lib.length
@@ -247,10 +247,10 @@ ${recap}
 ปมที่ยังค้าง: ${JSON.stringify(b.open_threads)}
 
 กติกา:
-- แบ่งเป็น ${SHOTS} ช็อต ช็อตละ ${SHOT_SEC} วินาที (number 1-${SHOTS}) และ backup_shot 1 ช็อต (number ${SHOTS + 1}) เป็นมุมสำรองของช็อตที่ภาพซับซ้อนที่สุด
-- 1 ช็อตมี 1 การกระทำหลัก บทพูดไม่เกิน 1 ประโยคสั้น
+- แบ่งเป็น ${SHOTS} ฉาก ฉากละ ${SHOT_SEC} วินาที (number 1-${SHOTS}) และ backup_shot 1 ฉาก (number ${SHOTS + 1}) เป็นมุมสำรองของฉากที่ภาพซับซ้อนที่สุด
+- 1 ฉากมี 1 การกระทำหลัก บทพูดไม่เกิน 1 ประโยคสั้น
 - ต่อจากตอนก่อนหน้าโดยตรง ห้ามขัดกับเหตุการณ์เดิม คลายปมเก่าอย่างน้อย 1 ข้อ และเปิดปมใหม่ 1 ข้อ
-- ช็อตสุดท้ายต้องเป็น cliffhanger
+- ฉากสุดท้ายต้องเป็น cliffhanger
 - prompt_en เป็นภาษาอังกฤษ ระบุมุมกล้อง การกระทำ แสง เสียงประกอบ ใช้ชื่อตัวละครเท่านั้น ห้ามบรรยายหน้าตา (ระบบจะเติมให้เอง) ห้ามมีตัวหนังสือบนภาพ
 - resolved_threads ต้องตรงกับข้อความใน open_threads เดิมทุกตัวอักษร
 
@@ -258,13 +258,13 @@ ${recap}
 ${EP_SHAPE}`;
 }
 function promptRewrite(ep, shot, note) {
-  return `ปรับ prompt วิดีโอของช็อตนี้ตามหมายเหตุ โดยคงเนื้อเรื่องเดิมไว้
+  return `ปรับ prompt วิดีโอของฉากนี้ตามหมายเหตุ โดยคงเนื้อเรื่องเดิมไว้
 
 Series Bible: ${JSON.stringify(bibleForAI())}
-ช็อตเดิม: ${JSON.stringify({ number: shot.number, action_th: shot.action_th, dialogue_th: shot.dialogue_th, prompt_en: shot.prompt_en })}
+ฉากเดิม: ${JSON.stringify({ number: shot.number, action_th: shot.action_th, dialogue_th: shot.dialogue_th, prompt_en: shot.prompt_en })}
 หมายเหตุจากผู้ใช้ (เช่น ภาพเพี้ยน ตัวละครผิด): ${note || "ทำให้ภาพเรียบง่ายขึ้น"}
 
-กติกา: prompt_en ภาษาอังกฤษ ใช้ชื่อตัวละครเท่านั้น ห้ามบรรยายหน้าตา ห้ามมีตัวหนังสือบนภาพ ช็อตยาว ${SHOT_SEC} วินาที ทำให้ภาพเรียบง่ายขึ้นเพื่อให้โมเดลวิดีโอสร้างได้แม่น
+กติกา: prompt_en ภาษาอังกฤษ ใช้ชื่อตัวละครเท่านั้น ห้ามบรรยายหน้าตา ห้ามมีตัวหนังสือบนภาพ ฉากยาว ${SHOT_SEC} วินาที ทำให้ภาพเรียบง่ายขึ้นเพื่อให้โมเดลวิดีโอสร้างได้แม่น
 
 ตอบเป็น JSON อย่างเดียว ไม่ต้องมีคำอธิบายอื่น ตามรูปแบบนี้:
 ${SHOT_SHAPE}`;
@@ -312,6 +312,14 @@ ${SHOT_SHAPE}`;
 }
 
 // ---------- AI task sheet ----------
+function renderPicker() {
+  T = null; $("#scrim").hidden = false;
+  const b = S.series.bible, avail = S.chars.filter((c) => c.name && !b.char_ids.includes(c.id));
+  $("#sheet").innerHTML = `<div class="row between"><h2 id="sheet-title">เลือกตัวละคร</h2><button class="btn ghost" data-act="close-sheet">เสร็จ</button></div>
+    ${avail.length ? `<div class="list">${avail.map((c) => `<button class="item" data-act="cast-add" data-id="${esc(c.id)}"><span class="nm">${esc(c.name)}${c.role ? ` <span class="muted small">· ${esc(c.role)}</span>` : ""}</span><span class="chip">+ เพิ่ม</span></button>`).join("")}</div>`
+      : `<div class="muted">ไม่มีตัวละครเหลือในคลัง ไปสร้างตัวละครใหม่ได้ที่ "จัดการ/สร้างตัวละคร"</div><button class="btn primary full" data-act="goto-chars">ไปสร้างตัวละคร</button>`}`;
+  $("#sheet").focus();
+}
 let infoText = "";
 function openInfo(title, desc, text) {
   T = null; infoText = text; $("#scrim").hidden = false;
@@ -411,8 +419,8 @@ function viewLibrary() {
 function viewHome() {
   const b = S.series.bible, eps = S.episodes, cur = eps[eps.length - 1], used = quotaUsed(), limit = quotaLimit();
   const curCard = cur ? `<div class="card"><div class="muted small">ตอนล่าสุด</div><div style="font-size:19px;font-weight:600;line-height:1.35">ตอนที่ ${cur.number} · ${esc(cur.title)}</div>
-    <div class="col"><div class="row between soft small"><span>ช็อตที่สร้างใน Flow แล้ว</span><span class="mono">${doneCount(cur)} / ${mainShots(cur).length}</span></div><div class="bar"><span style="width:${mainShots(cur).length ? (doneCount(cur) / mainShots(cur).length) * 100 : 0}%"></span></div></div>
-    <button class="btn full" data-act="open-ep" data-n="${cur.number}">เปิดบอร์ดช็อต</button></div>` : "";
+    <div class="col"><div class="row between soft small"><span>ฉากที่สร้างใน Flow แล้ว</span><span class="mono">${doneCount(cur)} / ${mainShots(cur).length}</span></div><div class="bar"><span style="width:${mainShots(cur).length ? (doneCount(cur) / mainShots(cur).length) * 100 : 0}%"></span></div></div>
+    <button class="btn full" data-act="open-ep" data-n="${cur.number}">เปิดบอร์ดฉาก</button></div>` : "";
   const list = eps.length ? `<div class="list"><h2>ตอนทั้งหมด</h2>${[...eps].reverse().map((e) => `<button class="item" data-act="open-ep" data-n="${e.number}"><span class="no mono">${pad(e.number)}</span><span class="nm">${esc(e.title)}</span>${epChip(e)}</button>`).join("")}</div>` : "";
   return `${banner()}<div class="col"><div class="muted small">ภาพรวมวันนี้</div><h1>${esc(b.title)}</h1></div>
   <button class="btn primary full" data-act="next">สร้างบทตอนใหม่</button>
@@ -420,7 +428,7 @@ function viewHome() {
   <div class="card"><div class="muted small">คลิป Flow ที่สร้างวันนี้</div>
     <div class="row" style="gap:8px;align-items:baseline"><span class="big mono">${used} / ${limit}</span><span class="soft">คลิป (${SHOT_SEC} วินาที)</span></div>${segs(used, limit)}
     <div class="row"><button class="btn ghost" data-act="adj" data-d="1">นับเพิ่ม 1 (สร้างซ้ำ)</button><button class="btn ghost" data-act="adj" data-d="-1">ลด 1</button></div>
-    <div class="muted small">นับจากช็อตที่คุณกดว่าสร้างแล้ว รีเซ็ตทุกวัน</div></div>
+    <div class="muted small">นับจากฉากที่คุณกดว่าสร้างแล้ว รีเซ็ตทุกวัน</div></div>
   ${curCard}
   <div class="card"><div class="muted small">ปมที่ยังค้างอยู่</div><div class="row" style="gap:8px;align-items:baseline"><span class="big mono">${b.open_threads.length}</span><span class="soft">ข้อ</span></div>
     <div class="muted small">ตอนถัดไปจะอ้างปมเหล่านี้โดยอัตโนมัติ</div></div>
@@ -428,7 +436,7 @@ function viewHome() {
 }
 function shotCard(ep, s) {
   const key = ep.number + ":" + s.number;
-  const label = s.backup ? "ช็อตสำรอง" : `ช็อต ${s.number}`;
+  const label = s.backup ? "ฉากสำรอง" : `ฉาก ${s.number}`;
   if (S.editShot === key) {
     return `<div class="card live"><div class="row between"><div style="font-weight:600;font-size:16px">แก้ไข${label}</div></div>
     <label class="field" for="es-a">เหตุการณ์ในฉาก (ไทย)<textarea id="es-a">${esc(s.action_th)}</textarea></label>
@@ -446,17 +454,20 @@ function shotCard(ep, s) {
     <div class="shot-act">${s.action_th ? esc(s.action_th) : `<span class="muted">(ยังไม่ได้ใส่เหตุการณ์)</span>`}${s.dialogue_th ? `<br><span class="muted">บทพูด:</span> ${esc(s.dialogue_th)}` : ""}</div>
     ${s.prompt_en ? `<div class="promptbox">${esc(full)}</div>` : `<div class="banner">ยังไม่มี prompt กด "แก้ไข" แล้วให้ AI เขียนจากคำอธิบาย หรือพิมพ์เอง</div>`}
     ${refBox}
-    ${s.backup ? `<div class="muted small">เก็บไว้สร้างเมื่อมีช็อตไหนเพี้ยน</div>` : ""}
+    ${s.backup ? `<div class="muted small">เก็บไว้สร้างเมื่อมีฉากไหนเพี้ยน</div>` : ""}
     <button class="btn primary full" data-act="copy" data-n="${ep.number}" data-s="${s.number}" ${s.prompt_en ? "" : "disabled"}>คัดลอก prompt</button>
     <div class="row"><button class="btn" style="flex:1" data-act="done" data-n="${ep.number}" data-s="${s.number}">${s.doneDate ? "ยกเลิกสร้างแล้ว" : "สร้างใน Flow แล้ว"}</button>
     <button class="btn ghost" style="flex:1" data-act="rewrite" data-n="${ep.number}" data-s="${s.number}">ปรับ prompt</button></div>
     <div class="row"><button class="btn ghost" style="flex:1" data-act="shot-edit" data-n="${ep.number}" data-s="${s.number}">แก้ไข</button>
-    <button class="btn ghost ${S.delShot === key ? "danger" : ""}" style="flex:1" data-act="shot-del" data-n="${ep.number}" data-s="${s.number}">${S.delShot === key ? "แตะอีกครั้งเพื่อลบ" : "ลบช็อต"}</button></div></div>`;
+    <button class="btn ghost ${S.delShot === key ? "danger" : ""}" style="flex:1" data-act="shot-del" data-n="${ep.number}" data-s="${s.number}">${S.delShot === key ? "แตะอีกครั้งเพื่อลบ" : "ลบฉาก"}</button></div></div>`;
 }
 function viewEpisode() {
   if (!S.episodes.length) return `${banner()}<div class="empty">ยังไม่มีตอน ไปที่ภาพรวมแล้วกด "สร้างบทตอนใหม่"</div>`;
   const ep = S.episodes.find((e) => e.number === S.epNo) || S.episodes[S.episodes.length - 1];
   S.epNo = ep.number;
+  const open = S.shotOpen && ep.shots.find((x) => ep.number + ":" + x.number === S.shotOpen);
+  if (open) return `${banner()}<button class="btn ghost" data-act="shot-back" style="align-self:flex-start">← ตอนที่ ${ep.number} · ${esc(ep.title)}</button>${shotCard(ep, open)}`;
+  S.shotOpen = null;
   return `${banner()}<div class="pills" role="tablist" aria-label="เลือกตอน">${S.episodes.map((e) => `<button class="pill ${e.number === ep.number ? "on" : ""}" data-act="open-ep" data-n="${e.number}">ตอน ${e.number}</button>`).join("")}</div>
   <div class="col"><div class="muted small">ตอนที่ ${ep.number}</div>${S.editEp ? "" : `<h1>${esc(ep.title)}</h1>`}</div>
   ${S.editEp
@@ -464,12 +475,11 @@ function viewEpisode() {
        <label class="field" for="ee-s">สรุปตอน (ตอนถัดไปจะใช้ข้อความนี้เป็นความจำ)<textarea id="ee-s">${esc(ep.summary_th)}</textarea></label>
        <div class="row"><button class="btn primary" style="flex:1" data-act="ep-save">บันทึก</button><button class="btn ghost" style="flex:1" data-act="ep-cancel">ยกเลิก</button></div></div>`
     : `<div class="card"><div class="muted small">สรุปบทตอนนี้</div><div class="soft">${esc(ep.summary_th)}</div><button class="btn ghost" data-act="ep-edit">แก้ชื่อและสรุปตอน</button></div>`}
-  <div class="card"><div class="muted small">สไตล์ที่ล็อกไว้ (ใส่หน้าทุก prompt อัตโนมัติ)</div><div class="promptbox">${esc(S.series.bible.style_lock_en)}</div></div>
-  <div class="row between"><span class="soft">โควตาวันนี้ ${quotaUsed()} จาก ${quotaLimit()}</span></div>${segs(quotaUsed(), quotaLimit())}
-  ${ep.shots.map((s) => shotCard(ep, s)).join("")}
-  <div class="card"><div class="muted small">เพิ่มฉากในตอนนี้</div>
-    <button class="btn full" data-act="shot-add" data-n="${ep.number}">+ เพิ่มฉากเอง (พิมพ์เหตุการณ์แล้วให้ AI ทำ prompt)</button>
-    <button class="btn full" data-act="shot-ai-add" data-n="${ep.number}">+ ให้ AI คิดฉากต่อ</button></div>`;
+  <div class="row between"><span class="soft">โควตาวันนี้ ${quotaUsed()} จาก ${quotaLimit()}</span><span class="soft mono small">${doneCount(ep)} / ${mainShots(ep).length} ฉาก</span></div>${segs(quotaUsed(), quotaLimit())}
+  <h2>ฉาก</h2>
+  <div class="list">${ep.shots.map((x) => `<button class="item" data-act="shot-open" data-n="${ep.number}" data-s="${x.number}"><span class="no mono">${pad(x.number)}</span><span class="nm clip">${x.action_th ? esc(x.action_th) : `<span class="muted">(ยังว่าง)</span>`}</span>${x.doneDate ? `<span class="chip ok">สร้างแล้ว</span>` : x.backup ? `<span class="chip">สำรอง</span>` : `<span class="chip">ยังไม่สร้าง</span>`}</button>`).join("")}</div>
+  <button class="btn full" data-act="shot-add" data-n="${ep.number}">+ เพิ่มฉากเอง</button>
+  <button class="btn full" data-act="shot-ai-add" data-n="${ep.number}">+ ให้ AI คิดฉากต่อ</button>`;
 }
 function charForm(c, i) {
   const used = S.lib.filter((e) => e.series.bible.char_ids.includes(c.id)).map((e) => e.series.bible.title);
@@ -506,11 +516,7 @@ function viewCharacters() {
 }
 function viewBible() {
   const b = S.series.bible;
-  const pick = S.chars.map((c) => {
-    const on = b.char_ids.includes(c.id);
-    return `<div class="card ${on ? "live" : ""}"><div class="row between"><div style="min-width:0"><div style="font-weight:600">${esc(c.name || "(ยังไม่มีชื่อ)")}</div><div class="muted small">${esc(c.role)}</div></div>
-      <button class="btn ${on ? "" : "primary"}" data-act="cast-toggle" data-id="${esc(c.id)}">${on ? "เอาออก" : "ใช้ในเรื่องนี้"}</button></div></div>`;
-  }).join("");
+  const pick = cast().map((c) => `<div class="item"><span class="nm">${esc(c.name || "(ยังไม่มีชื่อ)")}${c.role ? ` <span class="muted small">· ${esc(c.role)}</span>` : ""}</span><button class="btn ghost" data-act="cast-toggle" data-id="${esc(c.id)}">เอาออก</button></div>`).join("");
   const confirm = `<button class="btn ghost full" data-act="new-series">+ สร้างซีรีส์ใหม่ (เรื่องนี้ยังอยู่)</button>`;
   return `${banner()}<div class="col"><div class="muted small">ความจำของเรื่อง</div><h1>Series Bible</h1></div>
   <button class="btn primary full" data-act="save-bible">บันทึกการแก้ไข</button>
@@ -520,8 +526,9 @@ function viewBible() {
     <label class="field">สไตล์ภาพที่ล็อกไว้ (ภาษาอังกฤษ)<textarea id="b-style">${esc(b.style_lock_en)}</textarea></label>
     <label class="field">โควตา Flow ต่อวัน (คลิป)<input type="number" id="b-quota" min="1" max="20" value="${quotaLimit()}"></label></div>
   <h2>ตัวละครในเรื่องนี้ (${b.char_ids.length})</h2>
-  ${pick || `<div class="empty">ยังไม่มีตัวละครในคลัง</div>`}
-  <button class="btn full" data-act="tab" data-view="characters">จัดการ / เพิ่มตัวละครใหม่</button>
+  ${pick ? `<div class="list">${pick}</div>` : `<div class="empty">ยังไม่มีตัวละครในเรื่องนี้</div>`}
+  <button class="btn full" data-act="cast-pick">+ เพิ่มตัวละครเข้าเรื่อง</button>
+  <button class="btn ghost full" data-act="tab" data-view="characters">จัดการ/สร้างตัวละคร</button>
   <div class="card"><label class="field">ปมที่ยังค้าง (หนึ่งข้อต่อหนึ่งบรรทัด)<textarea id="b-threads" style="min-height:120px">${esc(b.open_threads.join("\n"))}</textarea></label></div>
   ${confirm}`;
 }
@@ -557,7 +564,7 @@ function render() {
   window.scrollTo(0, y);
 }
 function pruneCast() { const ids = new Set(S.chars.map((c) => c.id)); S.lib.forEach((e) => (e.series.bible.char_ids = e.series.bible.char_ids.filter((id) => ids.has(id)))); }
-function go(view, n) { if (syncBible() | syncChars()) saveLocal(); S.view = view; if (n) S.epNo = n; S.creating = false; S.confirmDel = null; S.confirmImport = false; S.editShot = null; S.editEp = false; S.delShot = null; S.delChar = null; S.charEdit = null; blurActive(); render(); window.scrollTo(0, 0); }
+function go(view, n) { if (syncBible() | syncChars()) saveLocal(); S.view = view; if (n) S.epNo = n; S.creating = false; S.confirmDel = null; S.confirmImport = false; S.editShot = null; S.editEp = false; S.delShot = null; S.delChar = null; S.charEdit = null; S.shotOpen = null; blurActive(); render(); window.scrollTo(0, 0); }
 function blurActive() { const a = document.activeElement; if (a && a !== document.body && a.blur && /^(INPUT|TEXTAREA)$/.test(a.tagName)) a.blur(); }
 function syncBible() {
   if (!S.series || !$("#b-title")) return false;
@@ -664,7 +671,7 @@ document.addEventListener("click", async (e) => {
     S.confirmDel = null; saveLocal(); render(); toast("ลบเรื่องแล้ว");
   }
   else if (act === "next") {
-    openTask({ title: `เขียนบทตอนที่ ${S.episodes.length + 1}`, desc: `ได้บท ${SHOTS} ช็อต (ช็อตละ ${SHOT_SEC} วินาที) พร้อม prompt สำหรับ Flow และช็อตสำรอง 1 ช็อต`, buildPrompt: promptEpisode, validate: vEpisode, doneMsg: "เขียนบทตอนใหม่แล้ว",
+    openTask({ title: `เขียนบทตอนที่ ${S.episodes.length + 1}`, desc: `ได้บท ${SHOTS} ฉาก (ฉากละ ${SHOT_SEC} วินาที) พร้อม prompt สำหรับ Flow และฉากสำรอง 1 ฉาก`, buildPrompt: promptEpisode, validate: vEpisode, doneMsg: "เขียนบทตอนใหม่แล้ว",
       onDone: async (v) => {
         const b = S.series.bible, number = S.episodes.length + 1;
         b.open_threads = b.open_threads.filter((t) => !v.resolved_threads.includes(t)).concat(v.new_threads);
@@ -675,7 +682,7 @@ document.addEventListener("click", async (e) => {
   }
   else if (act === "copy") {
     const s = epOf(n)?.shots.find((x) => x.number === sn);
-    if (s && !s.prompt_en) return toast("ช็อตนี้ยังไม่มี prompt", true);
+    if (s && !s.prompt_en) return toast("ฉากนี้ยังไม่มี prompt", true);
     if (s) toast((await copyText(flowPrompt(s))) ? "คัดลอก prompt แล้ว นำไปวางใน Flow ได้เลย" : "คัดลอกอัตโนมัติไม่ได้ กดค้างที่ข้อความแล้วเลือกคัดลอก", false);
   }
   else if (act === "done") {
@@ -687,7 +694,7 @@ document.addEventListener("click", async (e) => {
   else if (act === "rewrite") {
     const ep = epOf(n), s = ep?.shots.find((x) => x.number === sn);
     if (!s) return;
-    openTask({ title: `ปรับ prompt ช็อต ${s.backup ? "สำรอง" : s.number}`, desc: "บอกว่าช็อตนี้มีปัญหาอะไร แล้วให้ AI เขียน prompt ใหม่ที่สร้างได้แม่นขึ้น", noteLabel: "ปัญหาที่เจอ", noteDefault: "ทำให้ภาพเรียบง่ายขึ้น",
+    openTask({ title: `ปรับ prompt ฉาก ${s.backup ? "สำรอง" : s.number}`, desc: "บอกว่าฉากนี้มีปัญหาอะไร แล้วให้ AI เขียน prompt ใหม่ที่สร้างได้แม่นขึ้น", noteLabel: "ปัญหาที่เจอ", noteDefault: "ทำให้ภาพเรียบง่ายขึ้น",
       buildPrompt: (note) => promptRewrite(ep, s, note), validate: vRewrite, doneMsg: "ปรับ prompt แล้ว",
       onDone: async (v) => {
         const t = today(), spentToday = s.doneDate === t;   // a regenerated clip spends quota again
@@ -706,6 +713,8 @@ document.addEventListener("click", async (e) => {
   else if (act === "char-back") { S.chars = S.chars.filter((c) => c.name || c.look_en || c.role || c.sheet); S.charEdit = null; S.delChar = null; pruneCast(); render(); saveLocal(); window.scrollTo(0, 0); }
   else if (act === "char-open") { S.charEdit = el.dataset.id; render(); window.scrollTo(0, 0); }
   else if (act === "new-series") { S.creating = true; S.view = "home"; S.confirmDel = null; render(); window.scrollTo(0, 0); }
+  else if (act === "cast-pick") { syncBible(); renderPicker(); }
+  else if (act === "cast-add") { const b = S.series.bible, id = el.dataset.id; if (!b.char_ids.includes(id)) b.char_ids.push(id); render(); saveLocal(); renderPicker(); }
   else if (act === "cast-toggle") {
     const b = S.series.bible, id = el.dataset.id;
     b.char_ids = b.char_ids.includes(id) ? b.char_ids.filter((x) => x !== id) : [...b.char_ids, id];
@@ -738,12 +747,14 @@ document.addEventListener("click", async (e) => {
     ep.title = $("#ee-t").value.trim() || ep.title; ep.summary_th = $("#ee-s").value.trim() || ep.summary_th;
     S.editEp = false; render(); saveLocal(); toast("บันทึกแล้ว");
   }
+  else if (act === "shot-open") { S.shotOpen = n + ":" + sn; S.editShot = null; S.delShot = null; render(); window.scrollTo(0, 0); }
+  else if (act === "shot-back") { S.shotOpen = null; S.editShot = null; S.delShot = null; render(); window.scrollTo(0, 0); }
   else if (act === "shot-edit") { S.editShot = n + ":" + sn; S.delShot = null; render(); }
   else if (act === "shot-cancel") { S.editShot = null; render(); }
   else if (act === "shot-save") {
     const s = epOf(n)?.shots.find((x) => x.number === sn); if (!s) return;
     s.action_th = $("#es-a").value.trim(); s.dialogue_th = $("#es-d").value.trim(); s.prompt_en = $("#es-p").value.trim();
-    S.editShot = null; render(); saveLocal(); toast("บันทึกช็อตแล้ว");
+    S.editShot = null; render(); saveLocal(); toast("บันทึกฉากแล้ว");
   }
   else if (act === "shot-ai") {
     const ep = epOf(n), s = ep?.shots.find((x) => x.number === sn); if (!s) return;
@@ -758,7 +769,7 @@ document.addEventListener("click", async (e) => {
     const idx = ep.shots.findIndex((x) => x.backup);
     const ns = { number: 0, backup: false, action_th: "", dialogue_th: "", prompt_en: "", doneDate: null };
     ep.shots.splice(idx < 0 ? ep.shots.length : idx, 0, ns); renumber(ep);
-    S.editShot = ep.number + ":" + ns.number; render(); saveLocal();
+    S.shotOpen = S.editShot = ep.number + ":" + ns.number; render(); saveLocal(); window.scrollTo(0, 0);
   }
   else if (act === "shot-ai-add") {
     const ep = epOf(n); if (!ep) return;
@@ -772,7 +783,7 @@ document.addEventListener("click", async (e) => {
   else if (act === "shot-del") {
     const ep = epOf(n), key = n + ":" + sn; if (!ep) return;
     if (S.delShot !== key) { S.delShot = key; render(); return; }
-    ep.shots = ep.shots.filter((x) => x.number !== sn); renumber(ep); S.delShot = null; render(); saveLocal();
+    ep.shots = ep.shots.filter((x) => x.number !== sn); renumber(ep); S.delShot = null; S.shotOpen = null; render(); saveLocal(); window.scrollTo(0, 0);
   }
   else if (act === "copy-info") toast((await copyText(infoText)) ? "คัดลอก prompt แล้ว" : "คัดลอกไม่สำเร็จ กดค้างที่ข้อความแล้วเลือกคัดลอก", false);
 
@@ -814,6 +825,7 @@ document.addEventListener("click", async (e) => {
   else if (act === "close-sheet") closeSheet();
   else if (act === "mode") { if (T) { T.mode = el.dataset.mode; lsSet(LS_ENGINE, T.mode); T.err = ""; renderSheet(); } }
   else if (act === "run-auto") runAuto();
+  else if (act === "goto-chars") { closeSheet(); go("characters"); }
   else if (act === "goto-settings") { closeSheet(); go("settings"); }
   else if (act === "stop") { if (T && T.ctl) T.ctl.abort(); }
   else if (act === "copy-task") { if (T) toast((await copyText(T.buildPrompt(T.note))) ? "คัดลอกคำสั่งแล้ว ไปวางในแอป Gemini ได้เลย" : "คัดลอกไม่สำเร็จ", false); }
