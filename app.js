@@ -7,11 +7,11 @@ const today = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.g
 const epId = (n) => "e" + String(n).padStart(3, "0");
 
 const SHOTS = 6, SHOT_SEC = 10, MEMORY = 10;
-const LS_DATA = "autoseries.v1", LS_LIB = "autoseries.v2", LS_ENGINE = "autoseries.engine";
+const LS_DATA = "autoseries.v1", LS_LIB = "autoseries.v3", LS_LIB2 = "autoseries.v2", LS_ENGINE = "autoseries.engine";
 function lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch { /* storage blocked */ } }
 
-const S = { ready: false, lib: [], activeId: null, series: null, episodes: [], view: "home", epNo: null, creating: false, confirmDel: null, confirmImport: false, editShot: null, editEp: false, delShot: null };
+const S = { ready: false, chars: [], delChar: null, lib: [], activeId: null, series: null, episodes: [], view: "home", epNo: null, creating: false, confirmDel: null, confirmImport: false, editShot: null, editEp: false, delShot: null };
 let T = null;
 
 // ---------- storage (this browser only) ----------
@@ -29,18 +29,47 @@ function addSeries(series, episodes) { const id = uid(); S.lib.push({ id, series
 function saveLocal() {
   const e = S.lib.find((x) => x.id === S.activeId);
   if (e) { e.series = S.series; e.episodes = S.episodes; }
-  try { localStorage.setItem(LS_LIB, JSON.stringify({ v: 2, activeId: S.activeId, library: S.lib })); memoryOnly = false; }
+  try { localStorage.setItem(LS_LIB, JSON.stringify({ v: 3, activeId: S.activeId, library: S.lib, characters: S.chars })); memoryOnly = false; }
   catch { memoryOnly = true; toast("เก็บข้อมูลไม่ได้ (พื้นที่เต็มหรือถูกบล็อก) ควรดาวน์โหลดไฟล์สำรองทันที", true); }
 }
 async function putSeries() { saveLocal(); }
 async function putEpisode() { saveLocal(); }
 async function guarded(fn) { try { await fn(); } catch { toast("บันทึกไม่สำเร็จ ลองใหม่อีกครั้ง", true); } }
+const cast = () => (S.series ? S.series.bible.char_ids.map((id) => S.chars.find((c) => c.id === id)).filter(Boolean) : []);
+const newChar = (o) => ({ id: uid(), name: "", role: "", personality: "", goal: "", look_en: "", ...o });
+function bibleForAI() {
+  const { char_ids, ...rest } = S.series.bible;
+  return { ...rest, characters: cast().map((c) => ({ name: c.name, role: c.role, personality: c.personality, goal: c.goal, look_en: c.look_en })) };
+}
+// move characters embedded in old-format series into the shared library
+function normalizeLib() {
+  for (const e of S.lib) {
+    const b = e.series.bible;
+    if (Array.isArray(b.characters)) {
+      if (!Array.isArray(b.char_ids)) b.char_ids = [];
+      for (const c of b.characters) {
+        let m = S.chars.find((x) => x.name === c.name && x.look_en === c.look_en);
+        if (!m) { m = { ...newChar({}), ...c, id: c.id || uid() }; S.chars.push(m); }
+        if (!b.char_ids.includes(m.id)) b.char_ids.push(m.id);
+      }
+      delete b.characters;
+    }
+    if (!Array.isArray(b.char_ids)) b.char_ids = [];
+  }
+}
 function boot() {
   memoryOnly = !canStore();
   try {
-    const d2 = JSON.parse(lsGet(LS_LIB) || "null");
-    if (d2 && Array.isArray(d2.library)) { S.lib = d2.library.filter((x) => x && x.id && x.series && x.series.bible); activate(d2.activeId || (S.lib[0] && S.lib[0].id)); }
-    else { const d = JSON.parse(lsGet(LS_DATA) || "null"); if (d && d.series) { addSeries(d.series, d.episodes || []); saveLocal(); } }
+    const d3 = JSON.parse(lsGet(LS_LIB) || "null"), d2 = JSON.parse(lsGet(LS_LIB2) || "null");
+    const d = d3 && Array.isArray(d3.library) ? d3 : d2 && Array.isArray(d2.library) ? d2 : null;
+    if (d) {
+      S.chars = Array.isArray(d.characters) ? d.characters.filter((c) => c && c.id) : [];
+      S.lib = d.library.filter((x) => x && x.id && x.series && x.series.bible);
+      normalizeLib(); activate(d.activeId || (S.lib[0] && S.lib[0].id)); if (!d3) saveLocal();
+    } else {
+      const d1 = JSON.parse(lsGet(LS_DATA) || "null");
+      if (d1 && d1.series) { addSeries(d1.series, d1.episodes || []); normalizeLib(); saveLocal(); }
+    }
   } catch { /* start empty */ }
   try { const t = JSON.parse(lsGet(LS_SETTINGS) || "null"); if (t) settings = { key: String(t.key || ""), model: String(t.model || "") }; } catch { /* defaults */ }
   S.ready = true; render();
@@ -89,12 +118,12 @@ function quotaUsed() {
 function flowPrompt(shot) {
   const b = S.series.bible;
   const txt = (shot.prompt_en || "") + " " + (shot.action_th || "");
-  const looks = b.characters.filter((c) => c.name && c.look_en && txt.includes(c.name)).map((c) => `${c.name}: ${c.look_en}`);
+  const looks = cast().filter((c) => c.name && c.look_en && txt.includes(c.name)).map((c) => `${c.name}: ${c.look_en}`);
   return [b.style_lock_en, looks.length ? "Characters - " + looks.join("; ") : "", shot.prompt_en].filter(Boolean).join(" ");
 }
 function shotChars(shot) {
   const txt = (shot.prompt_en || "") + " " + (shot.action_th || "");
-  return S.series.bible.characters.filter((c) => c.name && txt.includes(c.name));
+  return cast().filter((c) => c.name && txt.includes(c.name));
 }
 function renumber(ep) {
   const main = ep.shots.filter((x) => !x.backup), back = ep.shots.filter((x) => x.backup);
@@ -102,8 +131,7 @@ function renumber(ep) {
   ep.shots.forEach((x, i) => (x.number = i + 1));
 }
 function charSheetPrompt(c) {
-  const b = S.series.bible;
-  return `Character design sheet of ${c.name}, ${c.look_en || "[describe the appearance here]"}. ${b.style_lock_en || ""} Full-body turnaround in one row: front view, side view and back view, plus three close-up face expressions (neutral, smiling, surprised). Identical proportions, face and outfit in every view, plain light-gray background, soft even studio lighting, no text, no labels, no watermark.`.replace(/\s+/g, " ").trim();
+  return `Character design sheet of ${c.name}, ${c.look_en || "[describe the appearance here]"}. ${S.series ? S.series.bible.style_lock_en || "" : ""} Full-body turnaround in one row: front view, side view and back view, plus three close-up face expressions (neutral, smiling, surprised). Identical proportions, face and outfit in every view, plain light-gray background, soft even studio lighting, no text, no labels, no watermark.`.replace(/\s+/g, " ").trim();
 }
 function fileToThumb(file, max = 1200) {
   return new Promise((res, rej) => {
@@ -145,12 +173,14 @@ function toast(msg, bad = false) {
 function str(v, name) { if (typeof v !== "string" || !v.trim()) throw new Error(`ในคำตอบไม่มีข้อมูล "${name}"`); return v.trim(); }
 function arr(v, name) { if (!Array.isArray(v)) throw new Error(`"${name}" ต้องเป็นรายการ`); return v; }
 function vBible(d) {
-  const chars = arr(d?.characters, "characters");
-  if (!chars.length) throw new Error("ไม่มีตัวละครในคำตอบ");
+  const news = Array.isArray(d?.characters) ? d.characters : [];
+  const use = Array.isArray(d?.use_existing) ? d.use_existing.map(String) : [];
+  const useIds = [...new Set(use.map((n) => S.chars.find((c) => c.name === n.trim())).filter(Boolean).map((c) => c.id))];
+  const newChars = news.map((c) => ({ name: str(c?.name, "name"), role: String(c?.role ?? "").trim(), personality: String(c?.personality ?? "").trim(), goal: String(c?.goal ?? "").trim(), look_en: str(c?.look_en, "look_en") }));
+  if (!newChars.length && !useIds.length) throw new Error("ไม่มีตัวละครในคำตอบ");
   return {
     title: str(d.title, "title"), world: str(d.world, "world"), tone: str(d.tone, "tone"), style_lock_en: str(d.style_lock_en, "style_lock_en"),
-    characters: chars.map((c) => ({ name: str(c?.name, "name"), role: String(c?.role ?? "").trim(), personality: String(c?.personality ?? "").trim(), goal: String(c?.goal ?? "").trim(), look_en: str(c?.look_en, "look_en") })),
-    open_threads: arr(d.open_threads, "open_threads").map(String),
+    newChars, useIds, open_threads: arr(d.open_threads, "open_threads").map(String),
   };
 }
 function vShot(s, number, backup) {
@@ -183,15 +213,20 @@ function extractJSON(text) {
 }
 
 // ---------- prompts ----------
-const BIBLE_SHAPE = `{"title":"ชื่อเรื่อง","world":"โลกและกติกาของเรื่อง","tone":"โทนเรื่อง","style_lock_en":"fixed visual style in English","characters":[{"name":"ชื่อ","role":"บทบาท","personality":"บุคลิก","goal":"เป้าหมาย","look_en":"fixed appearance in English"}],"open_threads":["ปมที่ค้าง"]}`;
+const BIBLE_SHAPE = `{"title":"ชื่อเรื่อง","world":"โลกและกติกาของเรื่อง","tone":"โทนเรื่อง","style_lock_en":"fixed visual style in English","use_existing":["ชื่อตัวละครเดิมจากคลังที่เลือกใช้ ตรงชื่อเป๊ะ"],"characters":[{"name":"ชื่อ","role":"บทบาท","personality":"บุคลิก","goal":"เป้าหมาย","look_en":"fixed appearance in English"}],"open_threads":["ปมที่ค้าง"]}`;
 const SHOT_SHAPE = `{"number":1,"action_th":"สิ่งที่เกิดขึ้นในช็อต","dialogue_th":"บทพูดสั้นๆ หรือว่าง","prompt_en":"camera, action, light, audio in English"}`;
 const EP_SHAPE = `{"title":"ชื่อตอน","summary_th":"สรุปตอน 2-3 ประโยค","shots":[${SHOT_SHAPE}, ... รวม ${SHOTS} ช็อต],"backup_shot":{"number":${SHOTS + 1},"action_th":"...","dialogue_th":"","prompt_en":"..."},"resolved_threads":["ข้อความปมเดิมที่คลายแล้ว"],"new_threads":["ปมใหม่"]}`;
 function promptBible(idea) {
+  const lib = S.chars.filter((c) => c.name).map((c) => ({ name: c.name, role: c.role, personality: c.personality, goal: c.goal, look_en: c.look_en }));
+  const libBlock = lib.length
+    ? `\nตัวละครที่มีอยู่แล้วในคลัง (ใช้ซ้ำได้เฉพาะเมื่อเหมาะกับเรื่องนี้จริงๆ ไม่ต้องฝืน):\n${JSON.stringify(lib)}\n`
+    : "";
   return `คุณคือผู้เขียนบทซีรีส์สั้นแนวตั้ง ตอนละ 1 นาที สร้าง Series Bible จากไอเดีย: ${idea}
-
+${libBlock}
 กติกา:
 - title, world, tone, personality, goal เป็นภาษาไทย
-- ตัวละคร 2-4 ตัว แต่ละตัวมีเป้าหมายและจุดอ่อนชัดเจน
+- ตัวละครรวม 2-4 ตัว แต่ละตัวมีเป้าหมายและจุดอ่อนชัดเจน
+- ถ้าตัวละครในคลังตัวไหนเหมาะ ให้ใส่ชื่อ (ตรงเป๊ะ) ใน use_existing และห้ามสร้างซ้ำใน characters ส่วนตัวละครที่ต้องสร้างใหม่ให้ใส่ใน characters ถ้าไม่ใช้ตัวเดิมเลยให้ use_existing เป็น []
 - look_en และ style_lock_en เป็นภาษาอังกฤษ บอกหน้าตา เสื้อผ้า สี และสไตล์ภาพให้คงที่ทุกตอน
 - open_threads: ปมใหญ่ 3-4 ข้อที่จะค่อยๆ คลายตลอดซีรีส์
 
@@ -204,7 +239,7 @@ function promptEpisode() {
   return `คุณคือผู้เขียนบทซีรีส์สั้นแนวตั้ง เขียนบทตอนที่ ${n}
 
 Series Bible:
-${JSON.stringify(b)}
+${JSON.stringify(bibleForAI())}
 
 สรุปตอนก่อนหน้า:
 ${recap}
@@ -225,7 +260,7 @@ ${EP_SHAPE}`;
 function promptRewrite(ep, shot, note) {
   return `ปรับ prompt วิดีโอของช็อตนี้ตามหมายเหตุ โดยคงเนื้อเรื่องเดิมไว้
 
-Series Bible: ${JSON.stringify(S.series.bible)}
+Series Bible: ${JSON.stringify(bibleForAI())}
 ช็อตเดิม: ${JSON.stringify({ number: shot.number, action_th: shot.action_th, dialogue_th: shot.dialogue_th, prompt_en: shot.prompt_en })}
 หมายเหตุจากผู้ใช้ (เช่น ภาพเพี้ยน ตัวละครผิด): ${note || "ทำให้ภาพเรียบง่ายขึ้น"}
 
@@ -238,7 +273,7 @@ ${SHOT_SHAPE}`;
 function promptLook(c, note) {
   return `เขียนคำบรรยายหน้าตาตัวละครเป็นภาษาอังกฤษ สำหรับล็อกให้เหมือนเดิมในทุก prompt สร้างวิดีโอ
 
-สไตล์ภาพของเรื่อง: ${S.series.bible.style_lock_en || "(ยังไม่กำหนด)"}
+สไตล์ภาพของเรื่อง: ${(S.series && S.series.bible.style_lock_en) || "(ยังไม่กำหนด)"}
 ตัวละคร: ${c.name} บทบาท: ${c.role || "-"} บุคลิก: ${c.personality || "-"}
 คำอธิบายหน้าตาจากผู้ใช้: ${note || "(ไม่มี ให้คิดให้เหมาะกับบทบาท)"}
 
@@ -249,7 +284,7 @@ function promptLook(c, note) {
 function promptShotFromText(ep, shot, action, dialogue, prompt) {
   return `แปลงคำอธิบายฉากของผู้ใช้เป็น prompt วิดีโอภาษาอังกฤษ ยาว ${SHOT_SEC} วินาที
 
-Series Bible: ${JSON.stringify(S.series.bible)}
+Series Bible: ${JSON.stringify(bibleForAI())}
 ตอน: ${ep.title} สรุป: ${ep.summary_th}
 เหตุการณ์ในฉาก (ผู้ใช้เขียน): ${action}
 บทพูด: ${dialogue || "(ไม่มี)"}
@@ -264,7 +299,7 @@ function promptNextShot(ep, note) {
   const have = ep.shots.filter((x) => !x.backup).map((x) => `${x.number}. ${x.action_th}`).join("\n");
   return `คิดฉากเพิ่ม 1 ฉากต่อจากฉากที่มีอยู่ของตอนนี้ ให้เนื้อเรื่องต่อเนื่องกัน
 
-Series Bible: ${JSON.stringify(S.series.bible)}
+Series Bible: ${JSON.stringify(bibleForAI())}
 ตอน: ${ep.title} สรุป: ${ep.summary_th}
 ฉากที่มีอยู่:
 ${have || "(ยังไม่มี)"}
@@ -368,7 +403,7 @@ function viewLibrary() {
     const del = S.confirmDel === e.id
       ? `<div class="row"><button class="btn danger" data-act="lib-del-go" data-id="${esc(e.id)}">ยืนยัน ลบเรื่องนี้ถาวร</button><button class="btn ghost" data-act="lib-del-cancel">ยกเลิก</button></div>`
       : `<div class="row"><button class="btn ${on ? "" : "primary"}" style="flex:1" data-act="lib-open" data-id="${esc(e.id)}">${on ? "กำลังใช้อยู่" : "เปิดเรื่องนี้"}</button><button class="btn ghost" data-act="lib-del" data-id="${esc(e.id)}">ลบ</button></div>`;
-    return `<div class="card ${on ? "live" : ""}"><div style="font-size:17px;font-weight:600">${esc(e.series.bible.title)}</div><div class="muted small">${e.episodes.length} ตอน · ตัวละคร ${e.series.bible.characters.length}</div>${del}</div>`;
+    return `<div class="card ${on ? "live" : ""}"><div style="font-size:17px;font-weight:600">${esc(e.series.bible.title)}</div><div class="muted small">${e.episodes.length} ตอน · ตัวละคร ${(e.series.bible.char_ids || []).length}</div>${del}</div>`;
   }).join("");
   return `${banner()}<div class="col"><div class="muted small">คลังของคุณ</div><h1>เรื่องทั้งหมด</h1></div>
   <button class="btn primary full" data-act="new-series">+ สร้างซีรีส์ใหม่ (ไม่ทับเรื่องเดิม)</button>${items || `<div class="empty">ยังไม่มีเรื่อง</div>`}`;
@@ -436,9 +471,9 @@ function viewEpisode() {
     <button class="btn full" data-act="shot-add" data-n="${ep.number}">+ เพิ่มฉากเอง (พิมพ์เหตุการณ์แล้วให้ AI ทำ prompt)</button>
     <button class="btn full" data-act="shot-ai-add" data-n="${ep.number}">+ ให้ AI คิดฉากต่อ</button></div>`;
 }
-function viewBible() {
-  const b = S.series.bible;
-  const chars = b.characters.map((c, i) => `<div class="char" data-char="${i}">
+function charForm(c, i) {
+  const used = S.lib.filter((e) => e.series.bible.char_ids.includes(c.id)).map((e) => e.series.bible.title);
+  return `<div class="char" data-char="${i}">
     <label class="field">ชื่อ<input type="text" data-f="name" value="${esc(c.name)}"></label>
     <label class="field">บทบาท<input type="text" data-f="role" value="${esc(c.role)}"></label>
     <label class="field">บุคลิก<textarea data-f="personality" style="min-height:60px">${esc(c.personality)}</textarea></label>
@@ -449,7 +484,23 @@ function viewBible() {
       <button class="btn" data-act="char-prompt" data-i="${i}">สร้าง prompt สำหรับทำ character sheet</button>
       <label class="btn filebtn">${c.sheet ? "เปลี่ยนรูป character sheet" : "แนบรูป character sheet"}<input type="file" accept="image/*" data-sheet="${i}" hidden></label>
       ${c.sheet ? `<button class="btn ghost" data-act="char-unsheet" data-i="${i}">เอารูปออก</button>` : ""}</div>
-    <button class="btn ghost" data-act="char-del" data-i="${i}">ลบตัวละครนี้</button></div>`).join("");
+    <div class="muted small">ใช้ในเรื่อง: ${used.length ? esc(used.join(", ")) : "ยังไม่ได้ใช้"}</div>
+    <button class="btn ${S.delChar === i ? "danger" : "ghost"}" data-act="char-del" data-i="${i}">${S.delChar === i ? "แตะอีกครั้งเพื่อลบ (ลบออกจากทุกเรื่อง)" : "ลบตัวละครนี้"}</button></div>`;
+}
+function viewCharacters() {
+  return `${banner()}<div class="col"><div class="muted small">คลังตัวละคร ใช้ร่วมกันได้ทุกเรื่อง</div><h1>ตัวละคร</h1></div>
+  <button class="btn primary full" data-act="save-chars">บันทึกการแก้ไข</button>
+  ${S.chars.map((c, i) => charForm(c, i)).join("") || `<div class="empty">ยังไม่มีตัวละคร กด "+ เพิ่มตัวละคร" ด้านล่าง หรือให้ AI สร้างพร้อม Series Bible</div>`}
+  <button class="btn full" data-act="char-add">+ เพิ่มตัวละคร</button>
+  <div class="muted small">แก้ตัวละครที่นี่ เรื่องที่ใช้ตัวละครนี้จะเปลี่ยนตาม ส่วนการเลือกว่าเรื่องไหนใช้ใครอยู่ที่หน้า Series Bible</div>`;
+}
+function viewBible() {
+  const b = S.series.bible;
+  const pick = S.chars.map((c) => {
+    const on = b.char_ids.includes(c.id);
+    return `<div class="card ${on ? "live" : ""}"><div class="row between"><div style="min-width:0"><div style="font-weight:600">${esc(c.name || "(ยังไม่มีชื่อ)")}</div><div class="muted small">${esc(c.role)}</div></div>
+      <button class="btn ${on ? "" : "primary"}" data-act="cast-toggle" data-id="${esc(c.id)}">${on ? "เอาออก" : "ใช้ในเรื่องนี้"}</button></div></div>`;
+  }).join("");
   const confirm = `<button class="btn ghost full" data-act="new-series">+ สร้างซีรีส์ใหม่ (เรื่องนี้ยังอยู่)</button>`;
   return `${banner()}<div class="col"><div class="muted small">ความจำของเรื่อง</div><h1>Series Bible</h1></div>
   <button class="btn primary full" data-act="save-bible">บันทึกการแก้ไข</button>
@@ -458,8 +509,9 @@ function viewBible() {
     <label class="field">โทนเรื่อง<input type="text" id="b-tone" value="${esc(b.tone)}"></label>
     <label class="field">สไตล์ภาพที่ล็อกไว้ (ภาษาอังกฤษ)<textarea id="b-style">${esc(b.style_lock_en)}</textarea></label>
     <label class="field">โควตา Flow ต่อวัน (คลิป)<input type="number" id="b-quota" min="1" max="20" value="${quotaLimit()}"></label></div>
-  <h2>ตัวละคร</h2>${chars || `<div class="empty">ยังไม่มีตัวละคร</div>`}
-  <button class="btn full" data-act="char-add">+ เพิ่มตัวละคร</button>
+  <h2>ตัวละครในเรื่องนี้ (${b.char_ids.length})</h2>
+  ${pick || `<div class="empty">ยังไม่มีตัวละครในคลัง</div>`}
+  <button class="btn full" data-act="tab" data-view="characters">จัดการ / เพิ่มตัวละครใหม่</button>
   <div class="card"><label class="field">ปมที่ยังค้าง (หนึ่งข้อต่อหนึ่งบรรทัด)<textarea id="b-threads" style="min-height:120px">${esc(b.open_threads.join("\n"))}</textarea></label></div>
   ${confirm}`;
 }
@@ -491,18 +543,25 @@ function render() {
   $("#sname").textContent = S.series ? S.series.bible.title + " ▾" : "";
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("on", t.dataset.view === S.view));
   const v = $("#view"), y = window.scrollY;
-  v.innerHTML = S.view === "settings" ? viewSettings() : S.view === "library" ? viewLibrary() : (!S.series || S.creating) ? viewInit() : S.view === "episode" ? viewEpisode() : S.view === "bible" ? viewBible() : viewHome();
+  v.innerHTML = S.view === "settings" ? viewSettings() : S.view === "library" ? viewLibrary() : S.view === "characters" ? viewCharacters() : (!S.series || S.creating) ? viewInit() : S.view === "episode" ? viewEpisode() : S.view === "bible" ? viewBible() : viewHome();
   window.scrollTo(0, y);
 }
-function go(view, n) { S.view = view; if (n) S.epNo = n; S.creating = false; S.confirmDel = null; S.confirmImport = false; S.editShot = null; S.editEp = false; S.delShot = null; blurActive(); render(); window.scrollTo(0, 0); }
+function pruneCast() { const ids = new Set(S.chars.map((c) => c.id)); S.lib.forEach((e) => (e.series.bible.char_ids = e.series.bible.char_ids.filter((id) => ids.has(id)))); }
+function go(view, n) { if (syncBible() | syncChars()) saveLocal(); S.view = view; if (n) S.epNo = n; S.creating = false; S.confirmDel = null; S.confirmImport = false; S.editShot = null; S.editEp = false; S.delShot = null; S.delChar = null; blurActive(); render(); window.scrollTo(0, 0); }
 function blurActive() { const a = document.activeElement; if (a && a !== document.body && a.blur && /^(INPUT|TEXTAREA)$/.test(a.tagName)) a.blur(); }
 function syncBible() {
-  if (!S.series || !$("#b-title")) return;
+  if (!S.series || !$("#b-title")) return false;
   const b = S.series.bible;
   b.title = $("#b-title").value.trim() || b.title; b.world = $("#b-world").value.trim(); b.tone = $("#b-tone").value.trim(); b.style_lock_en = $("#b-style").value.trim();
   b.open_threads = $("#b-threads").value.split("\n").map((t) => t.trim()).filter(Boolean);
   S.series.settings = { ...(S.series.settings || {}), dailyQuota: Math.min(20, Math.max(1, Number($("#b-quota").value) || 7)) };
-  document.querySelectorAll(".char").forEach((f, i) => { const c = b.characters[i]; if (c) f.querySelectorAll("[data-f]").forEach((x) => (c[x.dataset.f] = x.value.trim())); });
+  return true;
+}
+function syncChars() {
+  const forms = document.querySelectorAll(".char");
+  if (!forms.length) return false;
+  forms.forEach((f, i) => { const c = S.chars[i]; if (c) f.querySelectorAll("[data-f]").forEach((x) => (c[x.dataset.f] = x.value.trim())); });
+  return true;
 }
 
 // ---------- actions ----------
@@ -512,19 +571,35 @@ function parseBackup(text) {
   try { d = JSON.parse(text); } catch { throw new Error("ข้อมูลสำรองอ่านไม่ได้ (ไม่ใช่ JSON)"); }
   const items = d && Array.isArray(d.library) ? d.library : d && d.series ? [{ series: d.series, episodes: d.episodes }] : null;
   if (!items || !items.length) throw new Error("ไฟล์นี้ไม่ใช่ข้อมูลสำรองของ AutoSeries");
-  return items.map((it) => {
-    if (!it || !it.series || !it.series.bible || !Array.isArray(it.series.bible.characters) || !Array.isArray(it.episodes)) throw new Error("ข้อมูลซีรีส์ในไฟล์ไม่ครบ");
+  const out = items.map((it) => {
+    if (!it || !it.series || !it.series.bible || !(Array.isArray(it.series.bible.characters) || Array.isArray(it.series.bible.char_ids)) || !Array.isArray(it.episodes)) throw new Error("ข้อมูลซีรีส์ในไฟล์ไม่ครบ");
     for (const ep of it.episodes) if (!ep || !Array.isArray(ep.shots) || typeof ep.number !== "number") throw new Error("ข้อมูลตอนในไฟล์ไม่ครบ");
     return { series: it.series, episodes: it.episodes };
   });
+  return { items: out, chars: Array.isArray(d.characters) ? d.characters.filter((c) => c && c.id) : [] };
+}
+function importParsed(parsed) {
+  const map = {};
+  for (const c of parsed.chars) {
+    let m = S.chars.find((x) => x.id === c.id) || S.chars.find((x) => x.name === c.name && x.look_en === c.look_en);
+    if (!m) { m = { ...newChar({}), ...c }; S.chars.push(m); }
+    map[c.id] = m.id;
+  }
+  parsed.items.forEach((it) => {
+    const b = it.series.bible;
+    if (Array.isArray(b.char_ids)) b.char_ids = [...new Set(b.char_ids.map((id) => map[id]).filter(Boolean))];
+    addSeries(it.series, it.episodes);
+  });
+  normalizeLib();
+  return parsed.items.length;
 }
 document.addEventListener("change", async (e) => {
   if (e.target.dataset && e.target.dataset.sheet !== undefined && e.target.files.length) {
     const i = Number(e.target.dataset.sheet), f = e.target.files[0];
-    syncBible();
+    syncChars();
     try {
       const url = await fileToThumb(f);
-      const c = S.series.bible.characters[i]; if (!c) return;
+      const c = S.chars[i]; if (!c) return;
       c.sheet = url; blurActive(); render(); saveLocal(); toast("แนบ character sheet แล้ว");
     } catch (err) { toast(err.message || "แนบรูปไม่สำเร็จ", true); }
     return;
@@ -548,19 +623,24 @@ document.addEventListener("click", async (e) => {
   const act = el.dataset.act, n = Number(el.dataset.n), sn = Number(el.dataset.s);
   const epOf = (num) => S.episodes.find((x) => x.number === num);
   if (!el.matches("input,textarea")) blurActive();
-  if (/^char-/.test(act) || act === "new-series") syncBible();
+  if (/^char-/.test(act) || act === "save-chars") syncChars();
+  if (act === "new-series") syncBible();
 
-  if (act === "tab") { if (!S.series && el.dataset.view !== "home" && el.dataset.view !== "settings") return toast("สร้างซีรีส์ก่อน"); go(el.dataset.view); }
+  if (act === "tab") { if (!S.series && !["home", "settings", "characters"].includes(el.dataset.view)) return toast("สร้างซีรีส์ก่อน"); go(el.dataset.view); }
   else if (act === "open-ep") go("episode", n);
   else if (act === "init") {
     const idea = $("#idea").value.trim();
     if (!idea) return toast("กรุณาใส่ไอเดียของเรื่อง", true);
     openTask({ title: "สร้าง Series Bible", desc: "ได้ชื่อเรื่อง โลก ตัวละคร และปมใหญ่ของซีรีส์ แก้ไขต่อได้ที่หน้า Series Bible", buildPrompt: () => promptBible(idea), validate: vBible, doneMsg: "สร้าง Series Bible แล้ว",
-      onDone: async (bible) => { addSeries({ bible, settings: { dailyQuota: 7 }, adj: { date: "", n: 0 }, createdAt: new Date().toISOString() }, []); S.creating = false; S.view = "bible"; render(); await guarded(putSeries); } });
+      onDone: async (v) => {
+        const ids = [...v.useIds];
+        for (const c of v.newChars) { let m = S.chars.find((x) => x.name === c.name); if (!m) { m = newChar(c); S.chars.push(m); } if (!ids.includes(m.id)) ids.push(m.id); }
+        const bible = { title: v.title, world: v.world, tone: v.tone, style_lock_en: v.style_lock_en, open_threads: v.open_threads, char_ids: ids };
+        addSeries({ bible, settings: { dailyQuota: 7 }, adj: { date: "", n: 0 }, createdAt: new Date().toISOString() }, []); S.creating = false; S.view = "bible"; render(); await guarded(putSeries); } });
   }
   else if (act === "init-manual") {
     const idea = $("#idea").value.trim();
-    addSeries({ bible: { title: idea ? idea.slice(0, 40) : "ซีรีส์ใหม่", world: idea, tone: "", style_lock_en: "", characters: [], open_threads: [] }, settings: { dailyQuota: 7 }, adj: { date: "", n: 0 }, createdAt: new Date().toISOString() }, []);
+    addSeries({ bible: { title: idea ? idea.slice(0, 40) : "ซีรีส์ใหม่", world: idea, tone: "", style_lock_en: "", char_ids: [], open_threads: [] }, settings: { dailyQuota: 7 }, adj: { date: "", n: 0 }, createdAt: new Date().toISOString() }, []);
     S.creating = false; S.view = "bible"; render(); saveLocal(); toast("สร้างซีรีส์แล้ว กรอกรายละเอียดได้เลย");
   }
   else if (act === "cancel-create") { S.creating = false; render(); }
@@ -612,28 +692,29 @@ document.addEventListener("click", async (e) => {
     S.series.adj = { date: t, n: cur + Number(el.dataset.d) }; render();
     await guarded(putSeries);
   }
-  else if (act === "save-bible") {
-    syncBible();
-    const b = S.series.bible;
-    b.characters = b.characters.filter((c) => c.name);
-    render(); saveLocal(); toast("บันทึกแล้ว");
-  }
+  else if (act === "save-bible") { syncBible(); render(); saveLocal(); toast("บันทึกแล้ว"); }
+  else if (act === "save-chars") { S.chars = S.chars.filter((c) => c.name || c.look_en || c.role); pruneCast(); render(); saveLocal(); toast("บันทึกแล้ว"); }
   else if (act === "new-series") { S.creating = true; S.view = "home"; S.confirmDel = null; render(); window.scrollTo(0, 0); }
-  else if (act === "char-add") { S.series.bible.characters.push({ name: "", role: "", personality: "", goal: "", look_en: "" }); render(); saveLocal(); }
-  else if (act === "char-del") {
-    const i = Number(el.dataset.i), c = S.series.bible.characters[i];
-    if (!c) return;
-    if (S.delChar !== i) { S.delChar = i; toast("แตะ ลบตัวละครนี้ อีกครั้งเพื่อยืนยัน"); return; }
-    S.delChar = null; S.series.bible.characters.splice(i, 1); render(); saveLocal();
+  else if (act === "cast-toggle") {
+    const b = S.series.bible, id = el.dataset.id;
+    b.char_ids = b.char_ids.includes(id) ? b.char_ids.filter((x) => x !== id) : [...b.char_ids, id];
+    syncBible(); render(); saveLocal();
   }
-  else if (act === "char-unsheet") { const c = S.series.bible.characters[Number(el.dataset.i)]; if (c) { delete c.sheet; render(); saveLocal(); } }
+  else if (act === "char-add") { S.chars.push(newChar({})); render(); saveLocal(); window.scrollTo(0, document.body.scrollHeight); }
+  else if (act === "char-del") {
+    const i = Number(el.dataset.i), c = S.chars[i];
+    if (!c) return;
+    if (S.delChar !== i) { S.delChar = i; render(); return; }
+    S.delChar = null; S.chars.splice(i, 1); pruneCast(); render(); saveLocal();
+  }
+  else if (act === "char-unsheet") { const c = S.chars[Number(el.dataset.i)]; if (c) { delete c.sheet; render(); saveLocal(); } }
   else if (act === "char-prompt") {
-    const c = S.series.bible.characters[Number(el.dataset.i)]; if (!c) return;
+    const c = S.chars[Number(el.dataset.i)]; if (!c) return;
     if (!c.name) return toast("ใส่ชื่อตัวละครก่อน", true);
     openInfo(`prompt character sheet: ${c.name}`, "นำไปสร้างภาพใน Flow (โหมดสร้างภาพ) หรือ Gemini/Whisk แล้วดาวน์โหลดรูป กลับมาแนบที่ตัวละครนี้ ตอนสร้างวิดีโอให้แนบรูปนี้ใน Flow ด้วยเพื่อให้หน้าคงเดิม", charSheetPrompt(c));
   }
   else if (act === "char-look") {
-    const i = Number(el.dataset.i), c = S.series.bible.characters[i]; if (!c) return;
+    const i = Number(el.dataset.i), c = S.chars[i]; if (!c) return;
     if (!c.name) return toast("ใส่ชื่อตัวละครก่อน", true);
     openTask({ title: `เขียนหน้าตา: ${c.name}`, desc: "AI จะเขียนคำบรรยายหน้าตาภาษาอังกฤษ ที่ใช้ล็อกใน prompt ทุกฉาก", noteLabel: "อธิบายหน้าตาเป็นภาษาไทย (เว้นว่างให้ AI คิดเอง)", noteDefault: "",
       buildPrompt: (note) => promptLook(c, note), validate: vLook, doneMsg: "เขียนหน้าตาแล้ว",
@@ -699,13 +780,13 @@ document.addEventListener("click", async (e) => {
     catch (e) { msg.textContent = errCopy(e); msg.style.color = "var(--bad)"; }
   }
   else if (act === "export-download") {
-    const blob = new Blob([JSON.stringify({ v: 2, library: S.lib }, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ v: 3, library: S.lib, characters: S.chars }, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob); a.download = `autoseries-backup-${today()}.json`;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   }
-  else if (act === "export-copy") toast((await copyText(JSON.stringify({ v: 2, library: S.lib }, null, 2))) ? "คัดลอกข้อมูลสำรองแล้ว" : "คัดลอกไม่สำเร็จ", false);
+  else if (act === "export-copy") toast((await copyText(JSON.stringify({ v: 3, library: S.lib, characters: S.chars }, null, 2))) ? "คัดลอกข้อมูลสำรองแล้ว" : "คัดลอกไม่สำเร็จ", false);
   else if (act === "import-ask") {
     const text = $("#i-text").value.trim();
     if (!text && !importBuffer) return toast("เลือกไฟล์หรือวางข้อมูลสำรองก่อน", true);
@@ -715,7 +796,7 @@ document.addEventListener("click", async (e) => {
   }
   else if (act === "import-cancel") { S.confirmImport = false; importBuffer = ""; render(); }
   else if (act === "import-go") {
-    try { const items = parseBackup(importBuffer); items.forEach((it) => addSeries(it.series, it.episodes)); S.confirmImport = false; importBuffer = ""; S.view = "home"; saveLocal(); render(); toast(`นำเข้า ${items.length} เรื่องแล้ว`); }
+    try { const n2 = importParsed(parseBackup(importBuffer)); S.confirmImport = false; importBuffer = ""; S.view = "home"; saveLocal(); render(); toast(`นำเข้า ${n2} เรื่องแล้ว`); }
     catch (err) { toast(err.message, true); }
   }
   // sheet controls
