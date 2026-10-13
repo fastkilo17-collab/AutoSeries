@@ -11,7 +11,7 @@ const LS_DATA = "autoseries.v1", LS_LIB = "autoseries.v3", LS_LIB2 = "autoseries
 function lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch { /* storage blocked */ } }
 
-const S = { ready: false, chars: [], delChar: null, lib: [], activeId: null, series: null, episodes: [], view: "home", epNo: null, creating: false, confirmDel: null, confirmImport: false, editShot: null, editEp: false, delShot: null };
+const S = { ready: false, chars: [], delChar: null, charEdit: null, lib: [], activeId: null, series: null, episodes: [], view: "home", epNo: null, creating: false, confirmDel: null, confirmImport: false, editShot: null, editEp: false, delShot: null };
 let T = null;
 
 // ---------- storage (this browser only) ----------
@@ -488,11 +488,21 @@ function charForm(c, i) {
     <button class="btn ${S.delChar === i ? "danger" : "ghost"}" data-act="char-del" data-i="${i}">${S.delChar === i ? "แตะอีกครั้งเพื่อลบ (ลบออกจากทุกเรื่อง)" : "ลบตัวละครนี้"}</button></div>`;
 }
 function viewCharacters() {
+  if (S.charEdit) {
+    const i = S.chars.findIndex((c) => c.id === S.charEdit);
+    if (i >= 0) return `${banner()}<button class="btn ghost" data-act="char-back" style="align-self:flex-start">← รายชื่อตัวละคร</button>
+      <div class="col"><div class="muted small">แก้ไขตัวละคร</div><h1>${esc(S.chars[i].name || "ตัวละครใหม่")}</h1></div>
+      ${charForm(S.chars[i], i)}
+      <button class="btn primary full" data-act="char-back">บันทึกและกลับ</button>`;
+    S.charEdit = null;
+  }
+  const rows = S.chars.map((c) => {
+    const n = S.lib.filter((e) => e.series.bible.char_ids.includes(c.id)).length;
+    return `<button class="item" data-act="char-open" data-id="${esc(c.id)}"><span class="nm">${esc(c.name || "(ยังไม่มีชื่อ)")}${c.role ? ` <span class="muted small">· ${esc(c.role)}</span>` : ""}</span><span class="chip">${n ? `ใช้ ${n} เรื่อง` : "ยังไม่ใช้"}</span></button>`;
+  }).join("");
   return `${banner()}<div class="col"><div class="muted small">คลังตัวละคร ใช้ร่วมกันได้ทุกเรื่อง</div><h1>ตัวละคร</h1></div>
-  <button class="btn primary full" data-act="save-chars">บันทึกการแก้ไข</button>
-  ${S.chars.map((c, i) => charForm(c, i)).join("") || `<div class="empty">ยังไม่มีตัวละคร กด "+ เพิ่มตัวละคร" ด้านล่าง หรือให้ AI สร้างพร้อม Series Bible</div>`}
-  <button class="btn full" data-act="char-add">+ เพิ่มตัวละคร</button>
-  <div class="muted small">แก้ตัวละครที่นี่ เรื่องที่ใช้ตัวละครนี้จะเปลี่ยนตาม ส่วนการเลือกว่าเรื่องไหนใช้ใครอยู่ที่หน้า Series Bible</div>`;
+  <button class="btn primary full" data-act="char-add">+ เพิ่มตัวละคร</button>
+  ${rows ? `<div class="list">${rows}</div>` : `<div class="empty">ยังไม่มีตัวละคร กด "+ เพิ่มตัวละคร" หรือให้ AI สร้างพร้อม Series Bible</div>`}`;
 }
 function viewBible() {
   const b = S.series.bible;
@@ -547,7 +557,7 @@ function render() {
   window.scrollTo(0, y);
 }
 function pruneCast() { const ids = new Set(S.chars.map((c) => c.id)); S.lib.forEach((e) => (e.series.bible.char_ids = e.series.bible.char_ids.filter((id) => ids.has(id)))); }
-function go(view, n) { if (syncBible() | syncChars()) saveLocal(); S.view = view; if (n) S.epNo = n; S.creating = false; S.confirmDel = null; S.confirmImport = false; S.editShot = null; S.editEp = false; S.delShot = null; S.delChar = null; blurActive(); render(); window.scrollTo(0, 0); }
+function go(view, n) { if (syncBible() | syncChars()) saveLocal(); S.view = view; if (n) S.epNo = n; S.creating = false; S.confirmDel = null; S.confirmImport = false; S.editShot = null; S.editEp = false; S.delShot = null; S.delChar = null; S.charEdit = null; blurActive(); render(); window.scrollTo(0, 0); }
 function blurActive() { const a = document.activeElement; if (a && a !== document.body && a.blur && /^(INPUT|TEXTAREA)$/.test(a.tagName)) a.blur(); }
 function syncBible() {
   if (!S.series || !$("#b-title")) return false;
@@ -560,7 +570,7 @@ function syncBible() {
 function syncChars() {
   const forms = document.querySelectorAll(".char");
   if (!forms.length) return false;
-  forms.forEach((f, i) => { const c = S.chars[i]; if (c) f.querySelectorAll("[data-f]").forEach((x) => (c[x.dataset.f] = x.value.trim())); });
+  forms.forEach((f) => { const c = S.chars[Number(f.dataset.char)]; if (c) f.querySelectorAll("[data-f]").forEach((x) => (c[x.dataset.f] = x.value.trim())); });
   return true;
 }
 
@@ -623,7 +633,7 @@ document.addEventListener("click", async (e) => {
   const act = el.dataset.act, n = Number(el.dataset.n), sn = Number(el.dataset.s);
   const epOf = (num) => S.episodes.find((x) => x.number === num);
   if (!el.matches("input,textarea")) blurActive();
-  if (/^char-/.test(act) || act === "save-chars") syncChars();
+  if (/^char-/.test(act)) syncChars();
   if (act === "new-series") syncBible();
 
   if (act === "tab") { if (!S.series && !["home", "settings", "characters"].includes(el.dataset.view)) return toast("สร้างซีรีส์ก่อน"); go(el.dataset.view); }
@@ -693,19 +703,20 @@ document.addEventListener("click", async (e) => {
     await guarded(putSeries);
   }
   else if (act === "save-bible") { syncBible(); render(); saveLocal(); toast("บันทึกแล้ว"); }
-  else if (act === "save-chars") { S.chars = S.chars.filter((c) => c.name || c.look_en || c.role); pruneCast(); render(); saveLocal(); toast("บันทึกแล้ว"); }
+  else if (act === "char-back") { S.chars = S.chars.filter((c) => c.name || c.look_en || c.role || c.sheet); S.charEdit = null; S.delChar = null; pruneCast(); render(); saveLocal(); window.scrollTo(0, 0); }
+  else if (act === "char-open") { S.charEdit = el.dataset.id; render(); window.scrollTo(0, 0); }
   else if (act === "new-series") { S.creating = true; S.view = "home"; S.confirmDel = null; render(); window.scrollTo(0, 0); }
   else if (act === "cast-toggle") {
     const b = S.series.bible, id = el.dataset.id;
     b.char_ids = b.char_ids.includes(id) ? b.char_ids.filter((x) => x !== id) : [...b.char_ids, id];
     syncBible(); render(); saveLocal();
   }
-  else if (act === "char-add") { S.chars.push(newChar({})); render(); saveLocal(); window.scrollTo(0, document.body.scrollHeight); }
+  else if (act === "char-add") { const c = newChar({}); S.chars.push(c); S.charEdit = c.id; render(); saveLocal(); window.scrollTo(0, 0); }
   else if (act === "char-del") {
     const i = Number(el.dataset.i), c = S.chars[i];
     if (!c) return;
     if (S.delChar !== i) { S.delChar = i; render(); return; }
-    S.delChar = null; S.chars.splice(i, 1); pruneCast(); render(); saveLocal();
+    S.delChar = null; S.charEdit = null; S.chars.splice(i, 1); pruneCast(); render(); saveLocal(); window.scrollTo(0, 0);
   }
   else if (act === "char-unsheet") { const c = S.chars[Number(el.dataset.i)]; if (c) { delete c.sheet; render(); saveLocal(); } }
   else if (act === "char-prompt") {
