@@ -129,3 +129,12 @@ input, textarea { font-size: 16px; }
 .sub { margin: 0; }
 
 [hidden] { display: none !important; }
+
+button.sname { background: none; border: 0; font-family: inherit; cursor: pointer; padding: 10px 0 10px 8px; max-width: 55%; }
+.sname:empty { display: none; }
+.sheetbox { display: flex; flex-direction: column; gap: 10px; padding-top: 4px; }
+.sheetbox img, .thumbs img { max-width: 100%; border-radius: 10px; border: 1px solid var(--line); display: block; }
+.thumbs { display: flex; gap: 10px; flex-wrap: wrap; }
+.thumbs figure { margin: 0; width: calc(50% - 5px); }
+.thumbs figcaption { font-size: 12px; color: var(--muted); padding-top: 4px; }
+label.btn.filebtn { cursor: pointer; text-align: center; }

@@ -7,11 +7,11 @@ const today = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.g
 const epId = (n) => "e" + String(n).padStart(3, "0");
 
 const SHOTS = 6, SHOT_SEC = 10, MEMORY = 10;
-const LS_DATA = "autoseries.v1", LS_ENGINE = "autoseries.engine";
+const LS_DATA = "autoseries.v1", LS_LIB = "autoseries.v2", LS_ENGINE = "autoseries.engine";
 function lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch { /* storage blocked */ } }
 
-const S = { ready: false, series: null, episodes: [], view: "home", epNo: null, confirmNew: false, confirmImport: false };
+const S = { ready: false, lib: [], activeId: null, series: null, episodes: [], view: "home", epNo: null, creating: false, confirmDel: null, confirmImport: false, editShot: null, editEp: false, delShot: null };
 let T = null;
 
 // ---------- storage (this browser only) ----------
@@ -20,15 +20,28 @@ const LS_SETTINGS = "autoseries.settings";
 let memoryOnly = false;
 let settings = { key: "", model: "" };
 function canStore() { try { localStorage.setItem("__t", "1"); localStorage.removeItem("__t"); return true; } catch { return false; } }
+const uid = () => "s" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+function activate(id) {
+  const e = S.lib.find((x) => x.id === id);
+  S.activeId = e ? e.id : null; S.series = e ? e.series : null; S.episodes = e ? e.episodes : []; S.epNo = null;
+}
+function addSeries(series, episodes) { const id = uid(); S.lib.push({ id, series, episodes: episodes || [] }); activate(id); return id; }
 function saveLocal() {
-  try { localStorage.setItem(LS_DATA, JSON.stringify({ series: S.series, episodes: S.episodes })); } catch { memoryOnly = true; }
+  const e = S.lib.find((x) => x.id === S.activeId);
+  if (e) { e.series = S.series; e.episodes = S.episodes; }
+  try { localStorage.setItem(LS_LIB, JSON.stringify({ v: 2, activeId: S.activeId, library: S.lib })); memoryOnly = false; }
+  catch { memoryOnly = true; toast("เก็บข้อมูลไม่ได้ (พื้นที่เต็มหรือถูกบล็อก) ควรดาวน์โหลดไฟล์สำรองทันที", true); }
 }
 async function putSeries() { saveLocal(); }
 async function putEpisode() { saveLocal(); }
 async function guarded(fn) { try { await fn(); } catch { toast("บันทึกไม่สำเร็จ ลองใหม่อีกครั้ง", true); } }
 function boot() {
   memoryOnly = !canStore();
-  try { const d = JSON.parse(lsGet(LS_DATA) || "null"); if (d && d.series) { S.series = d.series; S.episodes = d.episodes || []; } } catch { /* start empty */ }
+  try {
+    const d2 = JSON.parse(lsGet(LS_LIB) || "null");
+    if (d2 && Array.isArray(d2.library)) { S.lib = d2.library.filter((x) => x && x.id && x.series && x.series.bible); activate(d2.activeId || (S.lib[0] && S.lib[0].id)); }
+    else { const d = JSON.parse(lsGet(LS_DATA) || "null"); if (d && d.series) { addSeries(d.series, d.episodes || []); saveLocal(); } }
+  } catch { /* start empty */ }
   try { const t = JSON.parse(lsGet(LS_SETTINGS) || "null"); if (t) settings = { key: String(t.key || ""), model: String(t.model || "") }; } catch { /* defaults */ }
   S.ready = true; render();
 }
@@ -75,8 +88,41 @@ function quotaUsed() {
 }
 function flowPrompt(shot) {
   const b = S.series.bible;
-  const looks = b.characters.filter((c) => c.name && shot.prompt_en.includes(c.name)).map((c) => `${c.name}: ${c.look_en}`);
+  const txt = (shot.prompt_en || "") + " " + (shot.action_th || "");
+  const looks = b.characters.filter((c) => c.name && c.look_en && txt.includes(c.name)).map((c) => `${c.name}: ${c.look_en}`);
   return [b.style_lock_en, looks.length ? "Characters - " + looks.join("; ") : "", shot.prompt_en].filter(Boolean).join(" ");
+}
+function shotChars(shot) {
+  const txt = (shot.prompt_en || "") + " " + (shot.action_th || "");
+  return S.series.bible.characters.filter((c) => c.name && txt.includes(c.name));
+}
+function renumber(ep) {
+  const main = ep.shots.filter((x) => !x.backup), back = ep.shots.filter((x) => x.backup);
+  ep.shots = [...main, ...back];
+  ep.shots.forEach((x, i) => (x.number = i + 1));
+}
+function charSheetPrompt(c) {
+  const b = S.series.bible;
+  return `Character design sheet of ${c.name}, ${c.look_en || "[describe the appearance here]"}. ${b.style_lock_en || ""} Full-body turnaround in one row: front view, side view and back view, plus three close-up face expressions (neutral, smiling, surprised). Identical proportions, face and outfit in every view, plain light-gray background, soft even studio lighting, no text, no labels, no watermark.`.replace(/\s+/g, " ").trim();
+}
+function fileToThumb(file, max = 1200) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onerror = () => rej(new Error("อ่านไฟล์ไม่สำเร็จ"));
+    r.onload = () => {
+      const im = new Image();
+      im.onerror = () => rej(new Error("ไฟล์นี้ไม่ใช่รูปที่อ่านได้"));
+      im.onload = () => {
+        const k = Math.min(1, max / Math.max(im.width, im.height));
+        const c = document.createElement("canvas");
+        c.width = Math.max(1, Math.round(im.width * k)); c.height = Math.max(1, Math.round(im.height * k));
+        c.getContext("2d").drawImage(im, 0, 0, c.width, c.height);
+        res(c.toDataURL("image/jpeg", 0.82));
+      };
+      im.src = String(r.result);
+    };
+    r.readAsDataURL(file);
+  });
 }
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); return true; } catch { /* fall back */ }
@@ -122,6 +168,7 @@ function vEpisode(d) {
     new_threads: Array.isArray(d.new_threads) ? d.new_threads.map(String) : [],
   };
 }
+function vLook(d) { return { look_en: str(d?.look_en, "look_en") }; }
 function vRewrite(d) { return { action_th: str(d?.action_th, "action_th"), dialogue_th: typeof d?.dialogue_th === "string" ? d.dialogue_th.trim() : "", prompt_en: str(d?.prompt_en, "prompt_en") }; }
 function extractJSON(text) {
   const t = String(text || "").trim();
@@ -188,7 +235,55 @@ Series Bible: ${JSON.stringify(S.series.bible)}
 ${SHOT_SHAPE}`;
 }
 
+function promptLook(c, note) {
+  return `เขียนคำบรรยายหน้าตาตัวละครเป็นภาษาอังกฤษ สำหรับล็อกให้เหมือนเดิมในทุก prompt สร้างวิดีโอ
+
+สไตล์ภาพของเรื่อง: ${S.series.bible.style_lock_en || "(ยังไม่กำหนด)"}
+ตัวละคร: ${c.name} บทบาท: ${c.role || "-"} บุคลิก: ${c.personality || "-"}
+คำอธิบายหน้าตาจากผู้ใช้: ${note || "(ไม่มี ให้คิดให้เหมาะกับบทบาท)"}
+
+กติกา: 1-2 ประโยค ระบุอายุโดยประมาณ ทรงผม สีผม ใบหน้า รูปร่าง เสื้อผ้า สี และจุดเด่นที่เห็นชัด ห้ามใส่ชื่อ ห้ามใส่ท่าทางหรือฉาก
+
+ตอบเป็น JSON อย่างเดียว: {"look_en":"..."}`;
+}
+function promptShotFromText(ep, shot, action, dialogue, prompt) {
+  return `แปลงคำอธิบายฉากของผู้ใช้เป็น prompt วิดีโอภาษาอังกฤษ ยาว ${SHOT_SEC} วินาที
+
+Series Bible: ${JSON.stringify(S.series.bible)}
+ตอน: ${ep.title} สรุป: ${ep.summary_th}
+เหตุการณ์ในฉาก (ผู้ใช้เขียน): ${action}
+บทพูด: ${dialogue || "(ไม่มี)"}
+prompt เดิม (ถ้ามี ให้ปรับต่อ): ${prompt || "(ไม่มี)"}
+
+กติกา: prompt_en ระบุมุมกล้อง การกระทำ แสง เสียงประกอบ ใช้ชื่อตัวละครเท่านั้น ห้ามบรรยายหน้าตา (ระบบเติมให้เอง) ห้ามมีตัวหนังสือบนภาพ 1 ฉากมี 1 การกระทำหลัก action_th และ dialogue_th ให้คงความหมายตามที่ผู้ใช้เขียน เกลาได้เล็กน้อย
+
+ตอบเป็น JSON อย่างเดียว ตามรูปแบบนี้:
+${SHOT_SHAPE}`;
+}
+function promptNextShot(ep, note) {
+  const have = ep.shots.filter((x) => !x.backup).map((x) => `${x.number}. ${x.action_th}`).join("\n");
+  return `คิดฉากเพิ่ม 1 ฉากต่อจากฉากที่มีอยู่ของตอนนี้ ให้เนื้อเรื่องต่อเนื่องกัน
+
+Series Bible: ${JSON.stringify(S.series.bible)}
+ตอน: ${ep.title} สรุป: ${ep.summary_th}
+ฉากที่มีอยู่:
+${have || "(ยังไม่มี)"}
+สิ่งที่ผู้ใช้อยากให้เกิด: ${note || "ให้ AI คิดเอง"}
+
+กติกา: ฉากยาว ${SHOT_SEC} วินาที 1 การกระทำหลัก บทพูดไม่เกิน 1 ประโยคสั้น prompt_en ภาษาอังกฤษ ระบุมุมกล้อง การกระทำ แสง เสียงประกอบ ใช้ชื่อตัวละครเท่านั้น ห้ามบรรยายหน้าตา ห้ามมีตัวหนังสือบนภาพ
+
+ตอบเป็น JSON อย่างเดียว ตามรูปแบบนี้:
+${SHOT_SHAPE}`;
+}
+
 // ---------- AI task sheet ----------
+let infoText = "";
+function openInfo(title, desc, text) {
+  T = null; infoText = text; $("#scrim").hidden = false;
+  $("#sheet").innerHTML = `<div class="row between"><h2 id="sheet-title">${esc(title)}</h2><button class="btn ghost" data-act="close-sheet">ปิด</button></div>
+    <div class="muted small">${esc(desc)}</div><div class="promptbox">${esc(text)}</div><button class="btn primary full" data-act="copy-info">คัดลอก prompt</button>`;
+  $("#sheet").focus();
+}
 function openTask(cfg) {
   const pref = lsGet(LS_ENGINE);
   T = { ...cfg, mode: settings.key && pref !== "paste" ? "auto" : "paste", busy: false, err: "", note: cfg.noteDefault || "", reply: "", ctl: null };
@@ -253,25 +348,40 @@ async function useReply() {
 function segs(used, limit) { return `<div class="segs" aria-hidden="true">${Array.from({ length: limit }, (_, i) => `<i class="${i < used ? "on" : ""}"></i>`).join("")}</div>`; }
 function epChip(ep) {
   const c = doneCount(ep);
-  if (c === SHOTS) return `<span class="chip ok">สร้างครบแล้ว</span>`;
+  const t = mainShots(ep).length;
+  if (t > 0 && c === t) return `<span class="chip ok">สร้างครบแล้ว</span>`;
   if (c === 0) return `<span class="chip">ยังไม่เริ่ม</span>`;
-  return `<span class="chip wait">สร้างแล้ว ${c}/${SHOTS}</span>`;
+  return `<span class="chip wait">สร้างแล้ว ${c}/${t}</span>`;
 }
 function banner() { return memoryOnly ? `<div class="banner">เบราว์เซอร์นี้ไม่ยอมให้เก็บข้อมูล (อาจเป็นโหมดส่วนตัว) ข้อมูลจะหายเมื่อปิดหน้านี้</div>` : ""; }
 
 function viewInit() {
   return `${banner()}<div class="col"><div class="muted small">เริ่มต้น</div><h1>สร้างซีรีส์ใหม่</h1></div>
   <div class="card"><label class="field" for="idea">ไอเดียของเรื่อง (แนว ตัวละคร โลกของเรื่อง)<textarea id="idea" placeholder="เช่น ร้านกาแฟที่ประตูหลังเปิดไปสู่มิติอื่นทุกคืนฝนตก"></textarea></label>
-  <button class="btn primary full" data-act="init">สร้าง Series Bible</button></div>`;
+  <button class="btn primary full" data-act="init">ให้ AI สร้าง Series Bible</button>
+  <button class="btn full" data-act="init-manual">สร้างเอง (ใส่ชื่อเรื่อง แล้วกรอกเองทีหลัง)</button>
+  ${S.series ? `<button class="btn ghost full" data-act="cancel-create">ยกเลิก กลับไปเรื่องเดิม (เรื่องเดิมไม่ถูกลบ)</button>` : ""}</div>`;
+}
+function viewLibrary() {
+  const items = S.lib.map((e) => {
+    const on = e.id === S.activeId;
+    const del = S.confirmDel === e.id
+      ? `<div class="row"><button class="btn danger" data-act="lib-del-go" data-id="${esc(e.id)}">ยืนยัน ลบเรื่องนี้ถาวร</button><button class="btn ghost" data-act="lib-del-cancel">ยกเลิก</button></div>`
+      : `<div class="row"><button class="btn ${on ? "" : "primary"}" style="flex:1" data-act="lib-open" data-id="${esc(e.id)}">${on ? "กำลังใช้อยู่" : "เปิดเรื่องนี้"}</button><button class="btn ghost" data-act="lib-del" data-id="${esc(e.id)}">ลบ</button></div>`;
+    return `<div class="card ${on ? "live" : ""}"><div style="font-size:17px;font-weight:600">${esc(e.series.bible.title)}</div><div class="muted small">${e.episodes.length} ตอน · ตัวละคร ${e.series.bible.characters.length}</div>${del}</div>`;
+  }).join("");
+  return `${banner()}<div class="col"><div class="muted small">คลังของคุณ</div><h1>เรื่องทั้งหมด</h1></div>
+  <button class="btn primary full" data-act="new-series">+ สร้างซีรีส์ใหม่ (ไม่ทับเรื่องเดิม)</button>${items || `<div class="empty">ยังไม่มีเรื่อง</div>`}`;
 }
 function viewHome() {
   const b = S.series.bible, eps = S.episodes, cur = eps[eps.length - 1], used = quotaUsed(), limit = quotaLimit();
   const curCard = cur ? `<div class="card"><div class="muted small">ตอนล่าสุด</div><div style="font-size:19px;font-weight:600;line-height:1.35">ตอนที่ ${cur.number} · ${esc(cur.title)}</div>
-    <div class="col"><div class="row between soft small"><span>ช็อตที่สร้างใน Flow แล้ว</span><span class="mono">${doneCount(cur)} / ${SHOTS}</span></div><div class="bar"><span style="width:${(doneCount(cur) / SHOTS) * 100}%"></span></div></div>
+    <div class="col"><div class="row between soft small"><span>ช็อตที่สร้างใน Flow แล้ว</span><span class="mono">${doneCount(cur)} / ${mainShots(cur).length}</span></div><div class="bar"><span style="width:${mainShots(cur).length ? (doneCount(cur) / mainShots(cur).length) * 100 : 0}%"></span></div></div>
     <button class="btn full" data-act="open-ep" data-n="${cur.number}">เปิดบอร์ดช็อต</button></div>` : "";
   const list = eps.length ? `<div class="list"><h2>ตอนทั้งหมด</h2>${[...eps].reverse().map((e) => `<button class="item" data-act="open-ep" data-n="${e.number}"><span class="no mono">${pad(e.number)}</span><span class="nm">${esc(e.title)}</span>${epChip(e)}</button>`).join("")}</div>` : "";
   return `${banner()}<div class="col"><div class="muted small">ภาพรวมวันนี้</div><h1>${esc(b.title)}</h1></div>
   <button class="btn primary full" data-act="next">สร้างบทตอนใหม่</button>
+  <button class="btn ghost full" data-act="library">เรื่องทั้งหมด (${S.lib.length}) · สร้างเรื่องใหม่</button>
   <div class="card"><div class="muted small">คลิป Flow ที่สร้างวันนี้</div>
     <div class="row" style="gap:8px;align-items:baseline"><span class="big mono">${used} / ${limit}</span><span class="soft">คลิป (${SHOT_SEC} วินาที)</span></div>${segs(used, limit)}
     <div class="row"><button class="btn ghost" data-act="adj" data-d="1">นับเพิ่ม 1 (สร้างซ้ำ)</button><button class="btn ghost" data-act="adj" data-d="-1">ลด 1</button></div>
@@ -282,27 +392,49 @@ function viewHome() {
   ${list}`;
 }
 function shotCard(ep, s) {
+  const key = ep.number + ":" + s.number;
   const label = s.backup ? "ช็อตสำรอง" : `ช็อต ${s.number}`;
+  if (S.editShot === key) {
+    return `<div class="card live"><div class="row between"><div style="font-weight:600;font-size:16px">แก้ไข${label}</div></div>
+    <label class="field" for="es-a">เหตุการณ์ในฉาก (ไทย)<textarea id="es-a">${esc(s.action_th)}</textarea></label>
+    <label class="field" for="es-d">บทพูด (เว้นว่างได้)<textarea id="es-d" style="min-height:56px">${esc(s.dialogue_th)}</textarea></label>
+    <label class="field" for="es-p">prompt ภาษาอังกฤษ (ระบบเติมสไตล์และหน้าตาตัวละครให้เอง)<textarea id="es-p" style="min-height:120px">${esc(s.prompt_en)}</textarea></label>
+    <button class="btn full" data-act="shot-ai" data-n="${ep.number}" data-s="${s.number}">ให้ AI เขียน prompt จากคำอธิบายด้านบน</button>
+    <div class="row"><button class="btn primary" style="flex:1" data-act="shot-save" data-n="${ep.number}" data-s="${s.number}">บันทึก</button><button class="btn ghost" style="flex:1" data-act="shot-cancel">ยกเลิก</button></div></div>`;
+  }
   const chip = s.doneDate ? `<span class="chip ok">สร้างแล้ว</span>` : s.backup ? `<span class="chip">สำรอง</span>` : `<span class="chip">ยังไม่สร้าง</span>`;
+  const refs = shotChars(s).filter((c) => c.sheet);
+  const refBox = refs.length ? `<div class="muted small">แนบรูปตัวละครนี้ใน Flow เพื่อให้หน้าเหมือนเดิม</div><div class="thumbs">${refs.map((c) => `<figure><img src="${c.sheet}" alt="character sheet ${esc(c.name)}"><figcaption>${esc(c.name)}</figcaption></figure>`).join("")}</div>` : "";
+  const full = flowPrompt(s);
   return `<div class="card ${s.backup ? "dashed" : ""}">
     <div class="row between"><div style="font-weight:600;font-size:16px">${label} <span class="mono small muted">${SHOT_SEC} วินาที</span></div>${chip}</div>
-    <div class="shot-act">${esc(s.action_th)}${s.dialogue_th ? `<br><span class="muted">บทพูด:</span> ${esc(s.dialogue_th)}` : ""}</div>
-    <div class="promptbox">${esc(flowPrompt(s))}</div>
+    <div class="shot-act">${s.action_th ? esc(s.action_th) : `<span class="muted">(ยังไม่ได้ใส่เหตุการณ์)</span>`}${s.dialogue_th ? `<br><span class="muted">บทพูด:</span> ${esc(s.dialogue_th)}` : ""}</div>
+    ${s.prompt_en ? `<div class="promptbox">${esc(full)}</div>` : `<div class="banner">ยังไม่มี prompt กด "แก้ไข" แล้วให้ AI เขียนจากคำอธิบาย หรือพิมพ์เอง</div>`}
+    ${refBox}
     ${s.backup ? `<div class="muted small">เก็บไว้สร้างเมื่อมีช็อตไหนเพี้ยน</div>` : ""}
-    <button class="btn primary full" data-act="copy" data-n="${ep.number}" data-s="${s.number}">คัดลอก prompt</button>
+    <button class="btn primary full" data-act="copy" data-n="${ep.number}" data-s="${s.number}" ${s.prompt_en ? "" : "disabled"}>คัดลอก prompt</button>
     <div class="row"><button class="btn" style="flex:1" data-act="done" data-n="${ep.number}" data-s="${s.number}">${s.doneDate ? "ยกเลิกสร้างแล้ว" : "สร้างใน Flow แล้ว"}</button>
-    <button class="btn ghost" style="flex:1" data-act="rewrite" data-n="${ep.number}" data-s="${s.number}">ปรับ prompt</button></div></div>`;
+    <button class="btn ghost" style="flex:1" data-act="rewrite" data-n="${ep.number}" data-s="${s.number}">ปรับ prompt</button></div>
+    <div class="row"><button class="btn ghost" style="flex:1" data-act="shot-edit" data-n="${ep.number}" data-s="${s.number}">แก้ไข</button>
+    <button class="btn ghost ${S.delShot === key ? "danger" : ""}" style="flex:1" data-act="shot-del" data-n="${ep.number}" data-s="${s.number}">${S.delShot === key ? "แตะอีกครั้งเพื่อลบ" : "ลบช็อต"}</button></div></div>`;
 }
 function viewEpisode() {
   if (!S.episodes.length) return `${banner()}<div class="empty">ยังไม่มีตอน ไปที่ภาพรวมแล้วกด "สร้างบทตอนใหม่"</div>`;
   const ep = S.episodes.find((e) => e.number === S.epNo) || S.episodes[S.episodes.length - 1];
   S.epNo = ep.number;
   return `${banner()}<div class="pills" role="tablist" aria-label="เลือกตอน">${S.episodes.map((e) => `<button class="pill ${e.number === ep.number ? "on" : ""}" data-act="open-ep" data-n="${e.number}">ตอน ${e.number}</button>`).join("")}</div>
-  <div class="col"><div class="muted small">ตอนที่ ${ep.number}</div><h1>${esc(ep.title)}</h1></div>
-  <div class="card"><div class="muted small">สรุปบทตอนนี้</div><div class="soft">${esc(ep.summary_th)}</div></div>
+  <div class="col"><div class="muted small">ตอนที่ ${ep.number}</div>${S.editEp ? "" : `<h1>${esc(ep.title)}</h1>`}</div>
+  ${S.editEp
+    ? `<div class="card live"><label class="field" for="ee-t">ชื่อตอน<input type="text" id="ee-t" value="${esc(ep.title)}"></label>
+       <label class="field" for="ee-s">สรุปตอน (ตอนถัดไปจะใช้ข้อความนี้เป็นความจำ)<textarea id="ee-s">${esc(ep.summary_th)}</textarea></label>
+       <div class="row"><button class="btn primary" style="flex:1" data-act="ep-save">บันทึก</button><button class="btn ghost" style="flex:1" data-act="ep-cancel">ยกเลิก</button></div></div>`
+    : `<div class="card"><div class="muted small">สรุปบทตอนนี้</div><div class="soft">${esc(ep.summary_th)}</div><button class="btn ghost" data-act="ep-edit">แก้ชื่อและสรุปตอน</button></div>`}
   <div class="card"><div class="muted small">สไตล์ที่ล็อกไว้ (ใส่หน้าทุก prompt อัตโนมัติ)</div><div class="promptbox">${esc(S.series.bible.style_lock_en)}</div></div>
   <div class="row between"><span class="soft">โควตาวันนี้ ${quotaUsed()} จาก ${quotaLimit()}</span></div>${segs(quotaUsed(), quotaLimit())}
-  ${ep.shots.map((s) => shotCard(ep, s)).join("")}`;
+  ${ep.shots.map((s) => shotCard(ep, s)).join("")}
+  <div class="card"><div class="muted small">เพิ่มฉากในตอนนี้</div>
+    <button class="btn full" data-act="shot-add" data-n="${ep.number}">+ เพิ่มฉากเอง (พิมพ์เหตุการณ์แล้วให้ AI ทำ prompt)</button>
+    <button class="btn full" data-act="shot-ai-add" data-n="${ep.number}">+ ให้ AI คิดฉากต่อ</button></div>`;
 }
 function viewBible() {
   const b = S.series.bible;
@@ -311,10 +443,14 @@ function viewBible() {
     <label class="field">บทบาท<input type="text" data-f="role" value="${esc(c.role)}"></label>
     <label class="field">บุคลิก<textarea data-f="personality" style="min-height:60px">${esc(c.personality)}</textarea></label>
     <label class="field">เป้าหมาย<textarea data-f="goal" style="min-height:60px">${esc(c.goal)}</textarea></label>
-    <label class="field">หน้าตา (ภาษาอังกฤษ ใช้ล็อกทุก prompt)<textarea data-f="look_en" style="min-height:60px">${esc(c.look_en)}</textarea></label></div>`).join("");
-  const confirm = S.confirmNew ? `<div class="card live"><div>ลบซีรีส์นี้และทุกตอนถาวร ควรดาวน์โหลดไฟล์สำรองที่แท็บตั้งค่าก่อน</div>
-    <div class="row"><button class="btn danger" data-act="wipe">ยืนยัน ลบทั้งหมด</button><button class="btn ghost" data-act="cancel-new">ยกเลิก</button></div></div>`
-    : `<button class="btn ghost full" data-act="new-series">เริ่มซีรีส์ใหม่</button>`;
+    <label class="field">หน้าตา (ภาษาอังกฤษ ใช้ล็อกทุก prompt)<textarea data-f="look_en" style="min-height:60px">${esc(c.look_en)}</textarea></label>
+    <button class="btn" data-act="char-look" data-i="${i}">ให้ AI เขียนหน้าตา (EN) จากคำอธิบายไทย</button>
+    <div class="sheetbox">${c.sheet ? `<img src="${c.sheet}" alt="character sheet ${esc(c.name)}">` : `<div class="muted small">ยังไม่มี character sheet</div>`}
+      <button class="btn" data-act="char-prompt" data-i="${i}">สร้าง prompt สำหรับทำ character sheet</button>
+      <label class="btn filebtn">${c.sheet ? "เปลี่ยนรูป character sheet" : "แนบรูป character sheet"}<input type="file" accept="image/*" data-sheet="${i}" hidden></label>
+      ${c.sheet ? `<button class="btn ghost" data-act="char-unsheet" data-i="${i}">เอารูปออก</button>` : ""}</div>
+    <button class="btn ghost" data-act="char-del" data-i="${i}">ลบตัวละครนี้</button></div>`).join("");
+  const confirm = `<button class="btn ghost full" data-act="new-series">+ สร้างซีรีส์ใหม่ (เรื่องนี้ยังอยู่)</button>`;
   return `${banner()}<div class="col"><div class="muted small">ความจำของเรื่อง</div><h1>Series Bible</h1></div>
   <button class="btn primary full" data-act="save-bible">บันทึกการแก้ไข</button>
   <div class="card"><label class="field">ชื่อเรื่อง<input type="text" id="b-title" value="${esc(b.title)}"></label>
@@ -322,14 +458,15 @@ function viewBible() {
     <label class="field">โทนเรื่อง<input type="text" id="b-tone" value="${esc(b.tone)}"></label>
     <label class="field">สไตล์ภาพที่ล็อกไว้ (ภาษาอังกฤษ)<textarea id="b-style">${esc(b.style_lock_en)}</textarea></label>
     <label class="field">โควตา Flow ต่อวัน (คลิป)<input type="number" id="b-quota" min="1" max="20" value="${quotaLimit()}"></label></div>
-  <h2>ตัวละคร</h2>${chars}
+  <h2>ตัวละคร</h2>${chars || `<div class="empty">ยังไม่มีตัวละคร</div>`}
+  <button class="btn full" data-act="char-add">+ เพิ่มตัวละคร</button>
   <div class="card"><label class="field">ปมที่ยังค้าง (หนึ่งข้อต่อหนึ่งบรรทัด)<textarea id="b-threads" style="min-height:120px">${esc(b.open_threads.join("\n"))}</textarea></label></div>
   ${confirm}`;
 }
 
 function viewSettings() {
   const imp = S.confirmImport
-    ? `<div class="card live"><div>นำเข้าจะแทนที่ซีรีส์และทุกตอนในเครื่องนี้ ยืนยันหรือไม่</div><div class="row"><button class="btn danger" data-act="import-go">ยืนยัน นำเข้า</button><button class="btn ghost" data-act="import-cancel">ยกเลิก</button></div></div>`
+    ? `<div class="card live"><div>นำเข้าจะเพิ่มซีรีส์จากไฟล์เข้ามาเป็นเรื่องใหม่ เรื่องที่มีอยู่ไม่ถูกลบ ยืนยันหรือไม่</div><div class="row"><button class="btn danger" data-act="import-go">ยืนยัน นำเข้า</button><button class="btn ghost" data-act="import-cancel">ยกเลิก</button></div></div>`
     : `<button class="btn full" data-act="import-ask">นำเข้าข้อมูลสำรอง</button>`;
   return `${banner()}<div class="col"><div class="muted small">ตั้งค่า</div><h1>ตั้งค่า</h1></div>
   <div class="card"><h2>Gemini API</h2>
@@ -350,25 +487,48 @@ function viewSettings() {
 function render() {
   if (!S.ready) return;
   const ae = document.activeElement;
-  if ((S.view === "bible" || S.view === "settings") && ae && /^(INPUT|TEXTAREA)$/.test(ae.tagName) && $("#view").contains(ae)) return; // do not wipe a form being edited
-  $("#sname").textContent = S.series ? S.series.bible.title : "";
+  if (ae && /^(INPUT|TEXTAREA)$/.test(ae.tagName) && $("#view").contains(ae)) return; // do not wipe a form being edited
+  $("#sname").textContent = S.series ? S.series.bible.title + " ▾" : "";
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("on", t.dataset.view === S.view));
   const v = $("#view"), y = window.scrollY;
-  v.innerHTML = S.view === "settings" ? viewSettings() : !S.series ? viewInit() : S.view === "episode" ? viewEpisode() : S.view === "bible" ? viewBible() : viewHome();
+  v.innerHTML = S.view === "settings" ? viewSettings() : S.view === "library" ? viewLibrary() : (!S.series || S.creating) ? viewInit() : S.view === "episode" ? viewEpisode() : S.view === "bible" ? viewBible() : viewHome();
   window.scrollTo(0, y);
 }
-function go(view, n) { S.view = view; if (n) S.epNo = n; S.confirmNew = false; S.confirmImport = false; render(); window.scrollTo(0, 0); }
+function go(view, n) { S.view = view; if (n) S.epNo = n; S.creating = false; S.confirmDel = null; S.confirmImport = false; S.editShot = null; S.editEp = false; S.delShot = null; blurActive(); render(); window.scrollTo(0, 0); }
+function blurActive() { const a = document.activeElement; if (a && a !== document.body && a.blur && /^(INPUT|TEXTAREA)$/.test(a.tagName)) a.blur(); }
+function syncBible() {
+  if (!S.series || !$("#b-title")) return;
+  const b = S.series.bible;
+  b.title = $("#b-title").value.trim() || b.title; b.world = $("#b-world").value.trim(); b.tone = $("#b-tone").value.trim(); b.style_lock_en = $("#b-style").value.trim();
+  b.open_threads = $("#b-threads").value.split("\n").map((t) => t.trim()).filter(Boolean);
+  S.series.settings = { ...(S.series.settings || {}), dailyQuota: Math.min(20, Math.max(1, Number($("#b-quota").value) || 7)) };
+  document.querySelectorAll(".char").forEach((f, i) => { const c = b.characters[i]; if (c) f.querySelectorAll("[data-f]").forEach((x) => (c[x.dataset.f] = x.value.trim())); });
+}
 
 // ---------- actions ----------
 let importBuffer = "";
 function parseBackup(text) {
   let d;
   try { d = JSON.parse(text); } catch { throw new Error("ข้อมูลสำรองอ่านไม่ได้ (ไม่ใช่ JSON)"); }
-  if (!d || !d.series || !d.series.bible || !Array.isArray(d.series.bible.characters) || !Array.isArray(d.episodes)) throw new Error("ไฟล์นี้ไม่ใช่ข้อมูลสำรองของ AutoSeries");
-  for (const ep of d.episodes) if (!ep || !Array.isArray(ep.shots) || typeof ep.number !== "number") throw new Error("ข้อมูลตอนในไฟล์ไม่ครบ");
-  return { series: d.series, episodes: d.episodes };
+  const items = d && Array.isArray(d.library) ? d.library : d && d.series ? [{ series: d.series, episodes: d.episodes }] : null;
+  if (!items || !items.length) throw new Error("ไฟล์นี้ไม่ใช่ข้อมูลสำรองของ AutoSeries");
+  return items.map((it) => {
+    if (!it || !it.series || !it.series.bible || !Array.isArray(it.series.bible.characters) || !Array.isArray(it.episodes)) throw new Error("ข้อมูลซีรีส์ในไฟล์ไม่ครบ");
+    for (const ep of it.episodes) if (!ep || !Array.isArray(ep.shots) || typeof ep.number !== "number") throw new Error("ข้อมูลตอนในไฟล์ไม่ครบ");
+    return { series: it.series, episodes: it.episodes };
+  });
 }
-document.addEventListener("change", (e) => {
+document.addEventListener("change", async (e) => {
+  if (e.target.dataset && e.target.dataset.sheet !== undefined && e.target.files.length) {
+    const i = Number(e.target.dataset.sheet), f = e.target.files[0];
+    syncBible();
+    try {
+      const url = await fileToThumb(f);
+      const c = S.series.bible.characters[i]; if (!c) return;
+      c.sheet = url; blurActive(); render(); saveLocal(); toast("แนบ character sheet แล้ว");
+    } catch (err) { toast(err.message || "แนบรูปไม่สำเร็จ", true); }
+    return;
+  }
   if (e.target.id !== "i-file" || !e.target.files.length) return;
   const r = new FileReader();
   r.onload = () => { importBuffer = String(r.result || ""); toast("อ่านไฟล์แล้ว กด นำเข้าข้อมูลสำรอง"); };
@@ -387,6 +547,8 @@ document.addEventListener("click", async (e) => {
   if (!el) return;
   const act = el.dataset.act, n = Number(el.dataset.n), sn = Number(el.dataset.s);
   const epOf = (num) => S.episodes.find((x) => x.number === num);
+  if (!el.matches("input,textarea")) blurActive();
+  if (/^char-/.test(act) || act === "new-series") syncBible();
 
   if (act === "tab") { if (!S.series && el.dataset.view !== "home" && el.dataset.view !== "settings") return toast("สร้างซีรีส์ก่อน"); go(el.dataset.view); }
   else if (act === "open-ep") go("episode", n);
@@ -394,7 +556,22 @@ document.addEventListener("click", async (e) => {
     const idea = $("#idea").value.trim();
     if (!idea) return toast("กรุณาใส่ไอเดียของเรื่อง", true);
     openTask({ title: "สร้าง Series Bible", desc: "ได้ชื่อเรื่อง โลก ตัวละคร และปมใหญ่ของซีรีส์ แก้ไขต่อได้ที่หน้า Series Bible", buildPrompt: () => promptBible(idea), validate: vBible, doneMsg: "สร้าง Series Bible แล้ว",
-      onDone: async (bible) => { S.series = { bible, settings: { dailyQuota: 7 }, adj: { date: "", n: 0 }, createdAt: new Date().toISOString() }; S.episodes = []; S.view = "bible"; render(); await guarded(putSeries); } });
+      onDone: async (bible) => { addSeries({ bible, settings: { dailyQuota: 7 }, adj: { date: "", n: 0 }, createdAt: new Date().toISOString() }, []); S.creating = false; S.view = "bible"; render(); await guarded(putSeries); } });
+  }
+  else if (act === "init-manual") {
+    const idea = $("#idea").value.trim();
+    addSeries({ bible: { title: idea ? idea.slice(0, 40) : "ซีรีส์ใหม่", world: idea, tone: "", style_lock_en: "", characters: [], open_threads: [] }, settings: { dailyQuota: 7 }, adj: { date: "", n: 0 }, createdAt: new Date().toISOString() }, []);
+    S.creating = false; S.view = "bible"; render(); saveLocal(); toast("สร้างซีรีส์แล้ว กรอกรายละเอียดได้เลย");
+  }
+  else if (act === "cancel-create") { S.creating = false; render(); }
+  else if (act === "library") go("library");
+  else if (act === "lib-open") { activate(el.dataset.id); saveLocal(); go("home"); }
+  else if (act === "lib-del") { S.confirmDel = el.dataset.id; render(); }
+  else if (act === "lib-del-cancel") { S.confirmDel = null; render(); }
+  else if (act === "lib-del-go") {
+    S.lib = S.lib.filter((x) => x.id !== el.dataset.id);
+    if (S.activeId === el.dataset.id) activate(S.lib[0] && S.lib[0].id);
+    S.confirmDel = null; saveLocal(); render(); toast("ลบเรื่องแล้ว");
   }
   else if (act === "next") {
     openTask({ title: `เขียนบทตอนที่ ${S.episodes.length + 1}`, desc: `ได้บท ${SHOTS} ช็อต (ช็อตละ ${SHOT_SEC} วินาที) พร้อม prompt สำหรับ Flow และช็อตสำรอง 1 ช็อต`, buildPrompt: promptEpisode, validate: vEpisode, doneMsg: "เขียนบทตอนใหม่แล้ว",
@@ -408,6 +585,7 @@ document.addEventListener("click", async (e) => {
   }
   else if (act === "copy") {
     const s = epOf(n)?.shots.find((x) => x.number === sn);
+    if (s && !s.prompt_en) return toast("ช็อตนี้ยังไม่มี prompt", true);
     if (s) toast((await copyText(flowPrompt(s))) ? "คัดลอก prompt แล้ว นำไปวางใน Flow ได้เลย" : "คัดลอกอัตโนมัติไม่ได้ กดค้างที่ข้อความแล้วเลือกคัดลอก", false);
   }
   else if (act === "done") {
@@ -435,21 +613,76 @@ document.addEventListener("click", async (e) => {
     await guarded(putSeries);
   }
   else if (act === "save-bible") {
+    syncBible();
     const b = S.series.bible;
-    const chars = [...document.querySelectorAll(".char")].map((c) => { const o = {}; c.querySelectorAll("[data-f]").forEach((f) => (o[f.dataset.f] = f.value.trim())); return o; }).filter((c) => c.name);
-    if (!chars.length) return toast("ต้องมีตัวละครอย่างน้อย 1 ตัว", true);
-    Object.assign(b, { title: $("#b-title").value.trim() || b.title, world: $("#b-world").value.trim(), tone: $("#b-tone").value.trim(), style_lock_en: $("#b-style").value.trim(), characters: chars,
-      open_threads: $("#b-threads").value.split("\n").map((t) => t.trim()).filter(Boolean) });
-    S.series.settings = { ...(S.series.settings || {}), dailyQuota: Math.min(20, Math.max(1, Number($("#b-quota").value) || 7)) };
-    document.activeElement.blur(); render();
-    await guarded(async () => { await putSeries(); toast("บันทึกแล้ว"); });
+    b.characters = b.characters.filter((c) => c.name);
+    render(); saveLocal(); toast("บันทึกแล้ว");
   }
-  else if (act === "new-series") { S.confirmNew = true; render(); }
-  else if (act === "cancel-new") { S.confirmNew = false; render(); }
-  else if (act === "wipe") {
-    S.series = null; S.episodes = []; S.confirmNew = false; S.view = "home"; render();
-    await guarded(async () => saveLocal());
+  else if (act === "new-series") { S.creating = true; S.view = "home"; S.confirmDel = null; render(); window.scrollTo(0, 0); }
+  else if (act === "char-add") { S.series.bible.characters.push({ name: "", role: "", personality: "", goal: "", look_en: "" }); render(); saveLocal(); }
+  else if (act === "char-del") {
+    const i = Number(el.dataset.i), c = S.series.bible.characters[i];
+    if (!c) return;
+    if (S.delChar !== i) { S.delChar = i; toast("แตะ ลบตัวละครนี้ อีกครั้งเพื่อยืนยัน"); return; }
+    S.delChar = null; S.series.bible.characters.splice(i, 1); render(); saveLocal();
   }
+  else if (act === "char-unsheet") { const c = S.series.bible.characters[Number(el.dataset.i)]; if (c) { delete c.sheet; render(); saveLocal(); } }
+  else if (act === "char-prompt") {
+    const c = S.series.bible.characters[Number(el.dataset.i)]; if (!c) return;
+    if (!c.name) return toast("ใส่ชื่อตัวละครก่อน", true);
+    openInfo(`prompt character sheet: ${c.name}`, "นำไปสร้างภาพใน Flow (โหมดสร้างภาพ) หรือ Gemini/Whisk แล้วดาวน์โหลดรูป กลับมาแนบที่ตัวละครนี้ ตอนสร้างวิดีโอให้แนบรูปนี้ใน Flow ด้วยเพื่อให้หน้าคงเดิม", charSheetPrompt(c));
+  }
+  else if (act === "char-look") {
+    const i = Number(el.dataset.i), c = S.series.bible.characters[i]; if (!c) return;
+    if (!c.name) return toast("ใส่ชื่อตัวละครก่อน", true);
+    openTask({ title: `เขียนหน้าตา: ${c.name}`, desc: "AI จะเขียนคำบรรยายหน้าตาภาษาอังกฤษ ที่ใช้ล็อกใน prompt ทุกฉาก", noteLabel: "อธิบายหน้าตาเป็นภาษาไทย (เว้นว่างให้ AI คิดเอง)", noteDefault: "",
+      buildPrompt: (note) => promptLook(c, note), validate: vLook, doneMsg: "เขียนหน้าตาแล้ว",
+      onDone: async (v) => { c.look_en = v.look_en; render(); saveLocal(); } });
+  }
+  else if (act === "ep-edit") { S.editEp = true; render(); }
+  else if (act === "ep-cancel") { S.editEp = false; render(); }
+  else if (act === "ep-save") {
+    const ep = epOf(S.epNo); if (!ep) return;
+    ep.title = $("#ee-t").value.trim() || ep.title; ep.summary_th = $("#ee-s").value.trim() || ep.summary_th;
+    S.editEp = false; render(); saveLocal(); toast("บันทึกแล้ว");
+  }
+  else if (act === "shot-edit") { S.editShot = n + ":" + sn; S.delShot = null; render(); }
+  else if (act === "shot-cancel") { S.editShot = null; render(); }
+  else if (act === "shot-save") {
+    const s = epOf(n)?.shots.find((x) => x.number === sn); if (!s) return;
+    s.action_th = $("#es-a").value.trim(); s.dialogue_th = $("#es-d").value.trim(); s.prompt_en = $("#es-p").value.trim();
+    S.editShot = null; render(); saveLocal(); toast("บันทึกช็อตแล้ว");
+  }
+  else if (act === "shot-ai") {
+    const ep = epOf(n), s = ep?.shots.find((x) => x.number === sn); if (!s) return;
+    const action = $("#es-a").value.trim(), dialogue = $("#es-d").value.trim(), prompt = $("#es-p").value.trim();
+    if (!action) return toast("พิมพ์เหตุการณ์ในฉากก่อน", true);
+    openTask({ title: "ทำเป็น prompt วิดีโอ", desc: "AI จะแปลงคำอธิบายฉากของคุณเป็น prompt ภาษาอังกฤษสำหรับ Flow", noteLabel: "หมายเหตุเพิ่มเติม (ไม่บังคับ)", noteDefault: "",
+      buildPrompt: (note) => promptShotFromText(ep, s, action, dialogue, prompt) + (note ? "\nหมายเหตุเพิ่มเติมจากผู้ใช้: " + note : ""), validate: vRewrite, doneMsg: "สร้าง prompt แล้ว",
+      onDone: async (v) => { Object.assign(s, v); S.editShot = null; render(); saveLocal(); } });
+  }
+  else if (act === "shot-add") {
+    const ep = epOf(n); if (!ep) return;
+    const idx = ep.shots.findIndex((x) => x.backup);
+    const ns = { number: 0, backup: false, action_th: "", dialogue_th: "", prompt_en: "", doneDate: null };
+    ep.shots.splice(idx < 0 ? ep.shots.length : idx, 0, ns); renumber(ep);
+    S.editShot = ep.number + ":" + ns.number; render(); saveLocal();
+  }
+  else if (act === "shot-ai-add") {
+    const ep = epOf(n); if (!ep) return;
+    openTask({ title: "ให้ AI คิดฉากต่อ", desc: "ได้ 1 ฉากใหม่ต่อท้ายฉากหลักของตอนนี้ แก้ไขต่อได้", noteLabel: "อยากให้เกิดอะไร (ไม่บังคับ)", noteDefault: "",
+      buildPrompt: (note) => promptNextShot(ep, note), validate: vRewrite, doneMsg: "เพิ่มฉากแล้ว",
+      onDone: async (v) => {
+        const idx = ep.shots.findIndex((x) => x.backup);
+        ep.shots.splice(idx < 0 ? ep.shots.length : idx, 0, { number: 0, backup: false, ...v, doneDate: null }); renumber(ep); render(); saveLocal();
+      } });
+  }
+  else if (act === "shot-del") {
+    const ep = epOf(n), key = n + ":" + sn; if (!ep) return;
+    if (S.delShot !== key) { S.delShot = key; render(); return; }
+    ep.shots = ep.shots.filter((x) => x.number !== sn); renumber(ep); S.delShot = null; render(); saveLocal();
+  }
+  else if (act === "copy-info") toast((await copyText(infoText)) ? "คัดลอก prompt แล้ว" : "คัดลอกไม่สำเร็จ กดค้างที่ข้อความแล้วเลือกคัดลอก", false);
 
   else if (act === "save-settings") {
     settings = { key: $("#s-key").value.trim(), model: $("#s-model").value.trim() };
@@ -466,13 +699,13 @@ document.addEventListener("click", async (e) => {
     catch (e) { msg.textContent = errCopy(e); msg.style.color = "var(--bad)"; }
   }
   else if (act === "export-download") {
-    const blob = new Blob([JSON.stringify({ series: S.series, episodes: S.episodes }, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ v: 2, library: S.lib }, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob); a.download = `autoseries-backup-${today()}.json`;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   }
-  else if (act === "export-copy") toast((await copyText(JSON.stringify({ series: S.series, episodes: S.episodes }, null, 2))) ? "คัดลอกข้อมูลสำรองแล้ว" : "คัดลอกไม่สำเร็จ", false);
+  else if (act === "export-copy") toast((await copyText(JSON.stringify({ v: 2, library: S.lib }, null, 2))) ? "คัดลอกข้อมูลสำรองแล้ว" : "คัดลอกไม่สำเร็จ", false);
   else if (act === "import-ask") {
     const text = $("#i-text").value.trim();
     if (!text && !importBuffer) return toast("เลือกไฟล์หรือวางข้อมูลสำรองก่อน", true);
@@ -482,7 +715,7 @@ document.addEventListener("click", async (e) => {
   }
   else if (act === "import-cancel") { S.confirmImport = false; importBuffer = ""; render(); }
   else if (act === "import-go") {
-    try { const d = parseBackup(importBuffer); S.series = d.series; S.episodes = d.episodes; S.confirmImport = false; importBuffer = ""; S.view = "home"; saveLocal(); render(); toast("นำเข้าข้อมูลแล้ว"); }
+    try { const items = parseBackup(importBuffer); items.forEach((it) => addSeries(it.series, it.episodes)); S.confirmImport = false; importBuffer = ""; S.view = "home"; saveLocal(); render(); toast(`นำเข้า ${items.length} เรื่องแล้ว`); }
     catch (err) { toast(err.message, true); }
   }
   // sheet controls
