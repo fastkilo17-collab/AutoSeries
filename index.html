@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#0e1014">
+<title>AutoSeries Studio</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar"><div class="topbar-in"><span class="mark"></span><span class="brand">AutoSeries Studio</span><span class="sname" id="sname"></span></div></header>
+<main class="wrap" id="view"><div class="empty">กำลังโหลด…</div></main>
+<nav class="tabbar" aria-label="เมนูหลัก"><div class="tabbar-in">
+  <button class="tab" data-act="tab" data-view="home">ภาพรวม</button>
+  <button class="tab" data-act="tab" data-view="episode">ตอนและช็อต</button>
+  <button class="tab" data-act="tab" data-view="bible">Series Bible</button>
+  <button class="tab" data-act="tab" data-view="settings">ตั้งค่า</button>
+</div></nav>
+<div class="scrim" id="scrim" hidden><div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" tabindex="-1"></div></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="app.js"></script>
+</body>
+</html>
