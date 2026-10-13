@@ -127,3 +127,5 @@ textarea { min-height: 84px; resize: vertical; line-height: 1.6; }
 input, textarea { font-size: 16px; }
 .tab { font-size: 14px; }
 .sub { margin: 0; }
+
+[hidden] { display: none !important; }
